@@ -20,6 +20,12 @@ public class TelloSimulator : MonoBehaviour
     private bool isMoving = false;
     private IPEndPoint lastSender;
 
+    private UdpClient telemetrySocket;
+    private IPEndPoint pythonTelemetryEndpoint;
+    public int telemetryPort = 9998;
+    public float telemetryRate = 0.1f;
+    private float telemetryTimer = 0f;
+
     void Start()
     {
         commandSocket = new UdpClient(8889);
@@ -27,6 +33,10 @@ public class TelloSimulator : MonoBehaviour
         receiveThread.IsBackground = true;
         receiveThread.Start();
         Debug.Log("TelloSimulator listening on port 8889");
+
+        telemetrySocket = new UdpClient();
+        pythonTelemetryEndpoint = new IPEndPoint(IPAddress.Parse("127.0.0.1"), telemetryPort);
+        Debug.Log("Telemetry sender ready on port " + telemetryPort);
     }
 
     void ReceiveCommands()
@@ -41,7 +51,7 @@ public class TelloSimulator : MonoBehaviour
                 string command = Encoding.UTF8.GetString(data).Trim();
                 Debug.Log("Received: " + command);
                 commandQueue.Enqueue(command);
-                SendResponse("ok", sender);
+                SendResponse(command, sender);
             }
             catch (Exception e)
             {
@@ -54,8 +64,8 @@ public class TelloSimulator : MonoBehaviour
     {
         try
         {
-            byte[] data = Encoding.UTF8.GetBytes(response);
-            commandSocket.Send(data, data.Length, target);
+            byte[] okData = Encoding.UTF8.GetBytes("ok");
+            commandSocket.Send(okData, okData.Length, target);
         }
         catch (Exception e)
         {
@@ -68,6 +78,52 @@ public class TelloSimulator : MonoBehaviour
         while (commandQueue.TryDequeue(out string command))
         {
             ExecuteCommand(command);
+        }
+
+        telemetryTimer += Time.deltaTime;
+        if (telemetryTimer >= telemetryRate)
+        {
+            telemetryTimer = 0f;
+            SendTelemetry();
+        }
+
+        if (isFlying)
+        {
+            transform.position += Vector3.up *
+                Mathf.Sin(Time.time * 2f) * 0.002f;
+        }
+    }
+
+    void SendTelemetry()
+    {
+        if (lastSender == null)
+        {
+            Debug.Log("SendTelemetry: lastSender is null, waiting for first command");
+            return;
+        }
+        Debug.Log($"Sending telemetry to {lastSender.Address}:{telemetryPort} pos:{transform.position}");
+        try
+        {
+            TelemetryData telemetry = new TelemetryData
+            {
+                pos_x = transform.position.x,
+                pos_y = transform.position.y,
+                pos_z = transform.position.z,
+                rot_x = transform.eulerAngles.x,
+                rot_y = transform.eulerAngles.y,
+                rot_z = transform.eulerAngles.z,
+                is_flying = isFlying,
+                timestamp = Time.time
+            };
+
+            string json = JsonUtility.ToJson(telemetry);
+            byte[] data = Encoding.UTF8.GetBytes(json);
+            telemetrySocket.Send(data, data.Length,
+                new IPEndPoint(lastSender.Address, telemetryPort));
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("Telemetry send error: " + e.Message);
         }
     }
 
@@ -96,32 +152,32 @@ public class TelloSimulator : MonoBehaviour
 
             case "forward":
                 if (isFlying && parts.Length > 1 && int.TryParse(parts[1], out int fDist))
-                    StartCoroutine(SmoothMove(transform.forward, fDist * 0.5f));
+                    StartCoroutine(SmoothMove(transform.TransformDirection(Vector3.forward), fDist * 0.05f));
                 break;
 
             case "back":
                 if (isFlying && parts.Length > 1 && int.TryParse(parts[1], out int bDist))
-                    StartCoroutine(SmoothMove(-transform.forward, bDist * 0.5f));
+                    StartCoroutine(SmoothMove(transform.TransformDirection(Vector3.back), bDist * 0.05f));
                 break;
 
             case "left":
                 if (isFlying && parts.Length > 1 && int.TryParse(parts[1], out int lDist))
-                    StartCoroutine(SmoothMove(-transform.right, lDist * 0.5f));
+                    StartCoroutine(SmoothMove(transform.TransformDirection(Vector3.left), lDist * 0.05f));
                 break;
 
             case "right":
                 if (isFlying && parts.Length > 1 && int.TryParse(parts[1], out int rDist))
-                    StartCoroutine(SmoothMove(transform.right, rDist * 0.5f));
+                    StartCoroutine(SmoothMove(transform.TransformDirection(Vector3.right), rDist * 0.05f));
                 break;
 
             case "up":
                 if (isFlying && parts.Length > 1 && int.TryParse(parts[1], out int uDist))
-                    StartCoroutine(SmoothMove(Vector3.up, uDist * 0.5f));
+                    StartCoroutine(SmoothMove(Vector3.up, uDist * 0.05f));
                 break;
 
             case "down":
                 if (isFlying && parts.Length > 1 && int.TryParse(parts[1], out int dDist))
-                    StartCoroutine(SmoothMove(Vector3.down, dDist * 0.5f));
+                    StartCoroutine(SmoothMove(Vector3.down, dDist * 0.05f));
                 break;
 
             case "cw":
@@ -148,9 +204,11 @@ public class TelloSimulator : MonoBehaviour
 
     IEnumerator SmoothMove(Vector3 direction, float distance)
     {
+        // Lock direction at start of movement
+        Vector3 lockedDirection = direction.normalized;
         Vector3 startPos = transform.position;
-        Vector3 targetPos = startPos + direction * distance;
-        float duration = distance / moveSpeed;
+        Vector3 targetPos = startPos + lockedDirection * distance;
+        float duration = Mathf.Max(distance / moveSpeed, 0.5f);
         float elapsed = 0f;
 
         while (elapsed < duration)
@@ -193,5 +251,19 @@ public class TelloSimulator : MonoBehaviour
     {
         receiveThread?.Abort();
         commandSocket?.Close();
+        telemetrySocket?.Close();
     }
+}
+
+[System.Serializable]
+public class TelemetryData
+{
+    public float pos_x;
+    public float pos_y;
+    public float pos_z;
+    public float rot_x;
+    public float rot_y;
+    public float rot_z;
+    public bool is_flying;
+    public float timestamp;
 }
