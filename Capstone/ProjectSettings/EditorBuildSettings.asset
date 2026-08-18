@@ -7,4 +7,6 @@ EditorBuildSettings:
   m_Scenes: []
   m_configObjects:
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 289c1b55c9541489481df5cc06664110, type: 3}
+    com.unity.xr.management.loader_settings: {fileID: 11400000, guid: 46eaa854031640d45adc05bace19c19a, type: 2}
+    xr.sdk.mock-hmd.settings: {fileID: 11400000, guid: acf9f72980cd66a42b99854ec347ae9f, type: 2}
   m_UseUCBPForAssetBundles: 0
