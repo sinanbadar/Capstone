@@ -26,6 +26,8 @@ public class TelloSimulator : MonoBehaviour
     public float telemetryRate = 0.1f;
     private float telemetryTimer = 0f;
 
+    public DroneStatusUI droneStatusUI;
+
     void Start()
     {
         commandSocket = new UdpClient(8889);
@@ -142,12 +144,16 @@ public class TelloSimulator : MonoBehaviour
                 isFlying = true;
                 StartCoroutine(SmoothMove(Vector3.up, 1.0f));
                 Debug.Log("Takeoff");
+                if (droneStatusUI != null)
+                    droneStatusUI.SetStatus(DroneStatusUI.DroneStatus.Flying);
                 break;
 
             case "land":
                 isFlying = false;
                 StartCoroutine(SmoothMove(Vector3.down, 1.0f));
                 Debug.Log("Land");
+                if (droneStatusUI != null)
+                    droneStatusUI.SetStatus(DroneStatusUI.DroneStatus.Idle);
                 break;
 
             case "forward":
