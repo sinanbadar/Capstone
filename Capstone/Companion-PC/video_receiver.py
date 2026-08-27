@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import json
 from ultralytics import YOLO
+import slam_client
 
 VIDEO_PORT = 11111
 DETECTION_PORT = 9999
@@ -19,6 +20,21 @@ detection_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 print(f"Listening for video on port {VIDEO_PORT}")
 print(f"Sending detections to Unity on port {DETECTION_PORT}")
 
+# ── SLAM ──────────────────────────────────────────────────
+# Start SLAM client, connects to mono_socket in WSL2
+# Make sure mono_socket is running first in Ubuntu terminal:
+# cd ~/ORB_SLAM3
+# ./Examples/Monocular/mono_socket Vocabulary/ORBvoc.txt Examples/Monocular/TUM1.yaml
+USE_SLAM = True
+if USE_SLAM:
+    try:
+        slam_client.start()
+        print("SLAM client connected")
+    except Exception as e:
+        print(f"SLAM connection failed: {e}, continuing without SLAM")
+        USE_SLAM = False
+# ─────────────────────────────────────────────────────────
+
 while True:
     try:
         data, addr = video_sock.recvfrom(65536)
@@ -26,6 +42,17 @@ while True:
         frame = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
 
         if frame is not None:
+
+            # ── SLAM ──────────────────────────────────────
+            if USE_SLAM:
+                slam_client.send_frame(frame)
+                position = slam_client.get_position()
+                if position["tracking"]:
+                    print(f"SLAM pos: {position['x']:.2f}, "
+                          f"{position['y']:.2f}, "
+                          f"{position['z']:.2f}")
+            # ─────────────────────────────────────────────
+
             results = model(frame, verbose=False)
             annotated_frame = results[0].plot()
             cv2.imshow("Drone Camera - YOLO", annotated_frame)
@@ -45,7 +72,10 @@ while True:
                         "y1": round(xyxy[1]),
                         "x2": round(xyxy[2]),
                         "y2": round(xyxy[3])
-                    }
+                    },
+                    # ── SLAM position at time of detection ──
+                    "slam_pos": slam_client.get_position() if USE_SLAM else None
+                    # ────────────────────────────────────────
                 }
                 detections.append(detection)
                 print(f"Detected: {label} confidence: {conf:.2f}")
