@@ -1,0 +1,10 @@
+Library/
+Temp/
+Obj/
+Logs/
+UserSettings/
+AR Builds/
+Builds/
+*.apk
+*.aab
+.utmp/
