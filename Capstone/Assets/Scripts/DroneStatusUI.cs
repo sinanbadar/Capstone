@@ -24,7 +24,7 @@ public class DroneStatusUI : MonoBehaviour
     public DetectionReceiver detectionReceiver;
 
     // ── MODE SWITCH ──────────────────────────────────────
-    private bool USE_REAL_TELLO = false;
+    private bool USE_REAL_TELLO = true;
     // Set to true when testing with real drone
     // ─────────────────────────────────────────────────────
 

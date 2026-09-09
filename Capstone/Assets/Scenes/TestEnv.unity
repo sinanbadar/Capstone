@@ -919,6 +919,52 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 384256945}
   m_CullTransparentMesh: 1
+--- !u!1 &403556701
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 403556703}
+  - component: {fileID: 403556702}
+  m_Layer: 0
+  m_Name: TelloBridge
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &403556702
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 403556701}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c9380530646d64343adde98c967b0136, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  droneStatusUI: {fileID: 1640049517}
+  listenPort: 8891
+--- !u!4 &403556703
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 403556701}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 53.949127, y: 47.21941, z: 109.61999}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &423827427
 GameObject:
   m_ObjectHideFlags: 0
@@ -1626,7 +1672,7 @@ GameObject:
   - component: {fileID: 911820189}
   - component: {fileID: 911820188}
   m_Layer: 5
-  m_Name: Fliht Time Label
+  m_Name: Flight Time Label
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -4451,3 +4497,4 @@ SceneRoots:
   - {fileID: 423827430}
   - {fileID: 1667615066}
   - {fileID: 2110827621}
+  - {fileID: 403556703}
