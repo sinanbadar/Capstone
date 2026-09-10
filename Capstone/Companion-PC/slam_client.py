@@ -4,9 +4,25 @@ import cv2
 import numpy as np
 import threading
 
-SLAM_HOST = "127.0.0.1"
+import subprocess
+
+def get_wsl2_ip():
+    try:
+        result = subprocess.run(
+            ["wsl", "-d", "Ubuntu-20.04", "hostname", "-I"],
+            capture_output=True, text=True, timeout=5
+        )
+        ip = result.stdout.strip().split()[0]
+        print(f"WSL2 IP: {ip}")
+        return ip
+    except Exception as e:
+        print(f"Could not get WSL2 IP, using fallback: {e}")
+        return "127.0.0.1"
+
+SLAM_HOST = get_wsl2_ip()
 SLAM_INPUT_PORT = 9100
 SLAM_OUTPUT_PORT = 9101
+
 
 slam_position = {"x": 0.0, "y": 0.0, "z": 0.0, "tracking": False}
 position_lock = threading.Lock()

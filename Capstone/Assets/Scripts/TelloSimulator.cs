@@ -12,6 +12,7 @@ public class TelloSimulator : MonoBehaviour
     public float moveSpeed = 5f;
     public float rotateSpeed = 120f;
     public float verticalSpeed = 3f;
+    private Vector4 rcVelocity = Vector4.zero;
 
     private UdpClient commandSocket;
     private Thread receiveThread;
@@ -82,6 +83,17 @@ public class TelloSimulator : MonoBehaviour
             ExecuteCommand(command);
         }
 
+        if (isFlying && rcVelocity != Vector4.zero)
+        {
+            float speed = 0.02f;
+            transform.Translate(
+                rcVelocity.x * speed * Time.deltaTime,
+                rcVelocity.z * speed * Time.deltaTime,
+                rcVelocity.y * speed * Time.deltaTime,
+                Space.Self);
+            transform.Rotate(0, rcVelocity.w * speed * 2f * Time.deltaTime, 0);
+        }
+
         telemetryTimer += Time.deltaTime;
         if (telemetryTimer >= telemetryRate)
         {
@@ -138,6 +150,22 @@ public class TelloSimulator : MonoBehaviour
         {
             case "command":
                 Debug.Log("SDK mode enabled");
+                break;
+
+            case "rc":
+                if (isFlying && parts.Length == 5)
+                {
+                    int.TryParse(parts[1], out int rcLR);
+                    int.TryParse(parts[2], out int rcFB);
+                    int.TryParse(parts[3], out int rcUD);
+                    int.TryParse(parts[4], out int rcYaw);
+
+                    rcVelocity = new Vector4(rcLR, rcFB, rcUD, rcYaw);
+                }
+                break;
+
+            case "rc 0 0 0 0":
+                rcVelocity = Vector4.zero;
                 break;
 
             case "takeoff":

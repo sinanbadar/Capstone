@@ -8,6 +8,7 @@ import slam_client
 VIDEO_PORT = 11111
 DETECTION_PORT = 9999
 UNITY_IP = "127.0.0.1"
+MAX_TIMEOUTS = 10
 
 model = YOLO("yolov8n.pt")
 
@@ -21,10 +22,6 @@ print(f"Listening for video on port {VIDEO_PORT}")
 print(f"Sending detections to Unity on port {DETECTION_PORT}")
 
 # ── SLAM ──────────────────────────────────────────────────
-# Start SLAM client, connects to mono_socket in WSL2
-# Make sure mono_socket is running first in Ubuntu terminal:
-# cd ~/ORB_SLAM3
-# ./Examples/Monocular/mono_socket Vocabulary/ORBvoc.txt Examples/Monocular/TUM1.yaml
 USE_SLAM = True
 if USE_SLAM:
     try:
@@ -35,9 +32,13 @@ if USE_SLAM:
         USE_SLAM = False
 # ─────────────────────────────────────────────────────────
 
+consecutive_timeouts = 0
+
 while True:
     try:
         data, addr = video_sock.recvfrom(65536)
+        consecutive_timeouts = 0
+
         np_array = np.frombuffer(data, dtype=np.uint8)
         frame = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
 
@@ -46,6 +47,7 @@ while True:
             # ── SLAM ──────────────────────────────────────
             if USE_SLAM:
                 slam_client.send_frame(frame)
+                print("Frame sent to SLAM")
                 position = slam_client.get_position()
                 if position["tracking"]:
                     print(f"SLAM pos: {position['x']:.2f}, "
@@ -73,9 +75,7 @@ while True:
                         "x2": round(xyxy[2]),
                         "y2": round(xyxy[3])
                     },
-                    # ── SLAM position at time of detection ──
                     "slam_pos": slam_client.get_position() if USE_SLAM else None
-                    # ────────────────────────────────────────
                 }
                 detections.append(detection)
                 print(f"Detected: {label} confidence: {conf:.2f}")
@@ -88,7 +88,11 @@ while True:
                 break
 
     except socket.timeout:
-        print("Waiting for frames...")
+        consecutive_timeouts += 1
+        print(f"Waiting for frames... ({consecutive_timeouts}/{MAX_TIMEOUTS})")
+        if consecutive_timeouts >= MAX_TIMEOUTS:
+            print("Unity stopped streaming. Exiting.")
+            break
 
 video_sock.close()
 detection_sock.close()
