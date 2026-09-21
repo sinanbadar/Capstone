@@ -31,8 +31,12 @@ input_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 output_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 def connect():
-    print("Connecting to SLAM...")
+    print(f"Connecting to {SLAM_HOST}:{SLAM_INPUT_PORT}")
     input_sock.connect((SLAM_HOST, SLAM_INPUT_PORT))
+    print("Input connected, waiting for output port...")
+    import time
+    time.sleep(2)  # wait for mono_socket to open port 9101
+    print(f"Connecting to {SLAM_HOST}:{SLAM_OUTPUT_PORT}")
     output_sock.connect((SLAM_HOST, SLAM_OUTPUT_PORT))
     print("Connected to SLAM")
 

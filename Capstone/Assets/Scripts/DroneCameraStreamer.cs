@@ -19,15 +19,24 @@ public class DroneCameraStreamer : MonoBehaviour
 
     void Start()
     {
-        frameInterval = 1f / frameRate;
-        frameTexture = new Texture2D(
-            droneRenderTexture.width,
-            droneRenderTexture.height,
-            TextureFormat.RGB24, false);
-        videoSocket = new UdpClient();
-        pythonEndpoint = new IPEndPoint(
-            IPAddress.Parse(pythonHost), videoPort);
-        Debug.Log("Camera streamer ready");
+        if (droneRenderTexture == null)
+    {
+        Debug.LogError("DroneCameraStreamer: droneRenderTexture is not assigned!");
+        return;
+    }
+    frameInterval = 1f / frameRate;
+    frameTexture = new Texture2D(
+        droneRenderTexture.width,
+        droneRenderTexture.height,
+        TextureFormat.RGB24, false);
+    videoSocket = new UdpClient();
+    
+    // Increase send buffer size for Mac
+    videoSocket.Client.SendBufferSize = 65536;
+    
+    pythonEndpoint = new IPEndPoint(
+        IPAddress.Parse(pythonHost), videoPort);
+    Debug.Log("Camera streamer ready");
     }
 
     void Update()

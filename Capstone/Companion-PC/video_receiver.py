@@ -3,12 +3,14 @@ import cv2
 import numpy as np
 import json
 from ultralytics import YOLO
-import slam_client
 
 VIDEO_PORT = 11111
 DETECTION_PORT = 9999
 UNITY_IP = "127.0.0.1"
 MAX_TIMEOUTS = 10
+
+DRONE_CONTROLLER_PORT = 9996
+drone_controller_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 model = YOLO("yolov8n.pt")
 
@@ -22,8 +24,9 @@ print(f"Listening for video on port {VIDEO_PORT}")
 print(f"Sending detections to Unity on port {DETECTION_PORT}")
 
 # ── SLAM ──────────────────────────────────────────────────
-USE_SLAM = True
+USE_SLAM = False
 if USE_SLAM:
+    import slam_client
     try:
         slam_client.start()
         print("SLAM client connected")
@@ -83,6 +86,7 @@ while True:
             if detections:
                 message = json.dumps(detections).encode()
                 detection_sock.sendto(message, (UNITY_IP, DETECTION_PORT))
+                drone_controller_sock.sendto(message, ("127.0.0.1", DRONE_CONTROLLER_PORT))
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
