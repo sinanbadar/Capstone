@@ -5,9 +5,30 @@ import json
 import telemetry_receiver  # type: ignore
 from controller_input import ControllerInput, ControlMode
 from autonomous_search import AutonomousSearch
+USE_REAL_TELLO = True
+USE_SLAM = True
+if USE_SLAM and USE_REAL_TELLO:
+    import slam_client
+    try:
+        slam_client.start()
+        print("SLAM client connected")
+    except Exception as e:
+        print(f"SLAM failed: {e}")
+        USE_SLAM = False
+
+def get_position():
+    if USE_SLAM and USE_REAL_TELLO:
+        return slam_client.get_position()
+    return telemetry_receiver.get_drone_state()
+
+autonomous = AutonomousSearch(
+    send_command_func=send_command,
+    get_detections_func=get_latest_detections,
+    get_position_func=get_position  # changed from telemetry_receiver.get_drone_state
+)
 
 # ── MODE SWITCH ──────────────────────────────────────────
-USE_REAL_TELLO = False
+  # Set to False to use Unity simulation instead of real Tello drone
 # ─────────────────────────────────────────────────────────
 
 UNITY_IP = "127.0.0.1"
@@ -24,7 +45,7 @@ telemetry_receiver.start()
 
 if USE_REAL_TELLO:
     from djitellopy import Tello
-    drone = Tello(host="192.168.0.7")
+    drone = Tello(host="192.168.10.1")
     drone.connect()
     print(f"Battery: {drone.get_battery()}%")
 
@@ -83,9 +104,6 @@ def run():
 
     send_command("command")
     time.sleep(0.5)
-
-    print("Starting in autonomous mode")
-    autonomous.start()
 
     while controller.running:
         action = controller.check_buttons()

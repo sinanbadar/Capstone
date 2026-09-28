@@ -2,20 +2,22 @@ import time
 import math
 import threading
 
-# ── ROOM PARAMETERS ──────────────────────────────────────
-ROOM_WIDTH_CM = 150
-ROOM_DEPTH_CM = 150
+# ── SEARCH PARAMETERS ────────────────────────────────────
 STEP_SIZE_CM = 50
 CRUISE_ALTITUDE_CM = 50
 DETECTION_CONFIDENCE_THRESHOLD = 0.65
-FLIGHT_SPEED = 70  # RC speed value 0-100
+FLIGHT_SPEED = 40
+MAX_ROWS = 20
+POINT_CLOUD_THRESHOLD_DISTANCE = 0.8  # metres
+POINT_CLOUD_MIN_POINTS = 5
 # ─────────────────────────────────────────────────────────
 
 class AutonomousSearch:
-    def __init__(self, send_command_func, get_detections_func, get_position_func):
+    def __init__(self, send_command_func, get_detections_func, get_position_func, get_point_cloud_func=None):
         self.send_command = send_command_func
         self.get_detections = get_detections_func
         self.get_position = get_position_func
+        self.get_point_cloud = get_point_cloud_func
         self.running = False
         self.thread = None
         self.visited = []
@@ -35,6 +37,52 @@ class AutonomousSearch:
         self.send_command("rc 0 0 0 0")
         print("Autonomous search stopped")
 
+    def obstacle_ahead(self):
+        # Primary: SLAM point cloud
+        if self.get_point_cloud:
+            point_cloud = self.get_point_cloud()
+            drone_pos = self.get_position()
+            drone_x = drone_pos.get("x", drone_pos.get("pos_x", 0))
+            drone_z = drone_pos.get("z", drone_pos.get("pos_z", 0))
+
+            forward_points = []
+            for point in point_cloud:
+                dx = point["x"] - drone_x
+                dz = point["z"] - drone_z
+                distance = math.sqrt(dx**2 + dz**2)
+                if distance < POINT_CLOUD_THRESHOLD_DISTANCE:
+                    forward_points.append(point)
+
+            if len(forward_points) >= POINT_CLOUD_MIN_POINTS:
+                print(f"Point cloud: {len(forward_points)} points within {POINT_CLOUD_THRESHOLD_DISTANCE}m")
+                return True
+
+        # Fallback: YOLO proximity
+        detections = self.get_detections()
+        for detection in detections:
+            bbox = detection["bbox"]
+            box_width = bbox["x2"] - bbox["x1"]
+            box_height = bbox["y2"] - bbox["y1"]
+            fill_ratio = (box_width * box_height) / (640 * 480)
+            if fill_ratio > 0.4:
+                print(f"YOLO proximity: {detection['label']} at {fill_ratio:.0%}")
+                return True
+
+        return False
+
+    def fly_until_blocked(self, lr, fb):
+        self.send_command(f"rc {lr} {fb} 0 0")
+        time.sleep(1.0)
+
+        while self.running:
+            time.sleep(0.2)
+            if self.obstacle_ahead():
+                self.send_command("rc 0 0 0 0")
+                time.sleep(0.3)
+                print("Obstacle detected, turning")
+                return
+            self._check_and_handle_detections()
+
     def _rc_move(self, lr, fb, ud, yaw, duration):
         self.send_command(f"rc {lr} {fb} {ud} {yaw}")
         end_time = time.time() + duration
@@ -49,38 +97,27 @@ class AutonomousSearch:
         self.send_command("takeoff")
         time.sleep(3)
 
-        # Rise to cruise altitude
         self._rc_move(0, 0, 50, 0, 1.5)
 
-        rows = math.ceil(ROOM_DEPTH_CM / STEP_SIZE_CM)
-        print(f"Search pattern: {rows} rows")
+        row = 0
+        print("Starting SLAM point cloud guided lawnmower")
 
-        # Time to fly room width at given speed
-        # speed 40 roughly = 40cm/s in simulation
-        fly_duration = ROOM_WIDTH_CM / FLIGHT_SPEED
-        step_duration = STEP_SIZE_CM / FLIGHT_SPEED
+        while self.running and row < MAX_ROWS:
+            print(f"Row {row + 1}")
 
-        for row in range(rows):
-            if not self.running:
-                break
-
-            print(f"Row {row + 1}/{rows}")
-
-            # Fly across room width
             if row % 2 == 0:
-                self._rc_move(0, FLIGHT_SPEED, 0, 0, fly_duration)
+                self.fly_until_blocked(0, FLIGHT_SPEED)
             else:
-                self._rc_move(0, -FLIGHT_SPEED, 0, 0, fly_duration)
+                self.fly_until_blocked(0, -FLIGHT_SPEED)
 
             if not self.running:
                 break
 
-            # Step to next row
-            if row < rows - 1:
-                self._rc_move(FLIGHT_SPEED, 0, 0, 0, step_duration)
+            self._rc_move(FLIGHT_SPEED, 0, 0, 0, STEP_SIZE_CM / FLIGHT_SPEED)
+            row += 1
 
         if self.running:
-            print("Coverage complete, landing")
+            print("Search complete, landing")
             self.send_command("land")
 
         self.running = False
@@ -105,15 +142,13 @@ class AutonomousSearch:
         self.visited.append({
             "label": detection["label"],
             "confidence": detection["confidence"],
-            "pos_x": pos.get("pos_x", 0),
-            "pos_z": pos.get("pos_z", 0)
+            "pos_x": pos.get("x", pos.get("pos_x", 0)),
+            "pos_z": pos.get("z", pos.get("pos_z", 0))
         })
 
-        # Pause movement
         self.send_command("rc 0 0 0 0")
         time.sleep(0.5)
 
-        # Lateral inspection
         self._rc_move(FLIGHT_SPEED, 0, 0, 0, 0.8)
         self._rc_move(-FLIGHT_SPEED, 0, 0, 0, 1.6)
         self._rc_move(FLIGHT_SPEED, 0, 0, 0, 0.8)
@@ -125,8 +160,8 @@ class AutonomousSearch:
         for v in self.visited:
             if v["label"] == detection["label"]:
                 dist = math.sqrt(
-                    (pos.get("pos_x", 0) - v["pos_x"])**2 +
-                    (pos.get("pos_z", 0) - v["pos_z"])**2
+                    (pos.get("x", pos.get("pos_x", 0)) - v["pos_x"])**2 +
+                    (pos.get("z", pos.get("pos_z", 0)) - v["pos_z"])**2
                 )
                 if dist < 80:
                     return True

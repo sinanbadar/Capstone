@@ -1,73 +1,148 @@
 import socket
 import struct
+import threading
+import platform
 import cv2
 import numpy as np
-import threading
 
-import subprocess
-
-def get_wsl2_ip():
-    try:
-        result = subprocess.run(
-            ["wsl", "-d", "Ubuntu-20.04", "hostname", "-I"],
-            capture_output=True, text=True, timeout=5
-        )
-        ip = result.stdout.strip().split()[0]
-        print(f"WSL2 IP: {ip}")
-        return ip
-    except Exception as e:
-        print(f"Could not get WSL2 IP, using fallback: {e}")
+def get_slam_host():
+    if platform.system() == "Windows":
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["wsl", "-d", "Ubuntu-20.04", "hostname", "-I"],
+                capture_output=True, text=True, timeout=5
+            )
+            return result.stdout.strip().split()[0]
+        except Exception:
+            return "127.0.0.1"
+    else:
         return "127.0.0.1"
 
-SLAM_HOST = get_wsl2_ip()
+SLAM_HOST = get_slam_host()
 SLAM_INPUT_PORT = 9100
 SLAM_OUTPUT_PORT = 9101
-
-
-slam_position = {"x": 0.0, "y": 0.0, "z": 0.0, "tracking": False}
-position_lock = threading.Lock()
 
 input_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 output_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
+current_position = {"x": 0.0, "y": 0.0, "z": 0.0, "tracking": False}
+current_points = []
+position_lock = threading.Lock()
+points_lock = threading.Lock()
+import struct as struct_module
+
 def connect():
     print(f"Connecting to {SLAM_HOST}:{SLAM_INPUT_PORT}")
+    input_sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, 
+                          struct_module.pack('ii', 1, 10))
     input_sock.connect((SLAM_HOST, SLAM_INPUT_PORT))
     print("Input connected, waiting for output port...")
     import time
-    time.sleep(2)  # wait for mono_socket to open port 9101
+    time.sleep(2)
     print(f"Connecting to {SLAM_HOST}:{SLAM_OUTPUT_PORT}")
     output_sock.connect((SLAM_HOST, SLAM_OUTPUT_PORT))
     print("Connected to SLAM")
 
 def send_frame(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    _, jpeg = cv2.imencode('.jpg', gray, [cv2.IMWRITE_JPEG_QUALITY, 90])
-    data = jpeg.tobytes()
-    size = struct.pack('<I', len(data))
-    input_sock.sendall(size + data)
+    try:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        _, jpeg = cv2.imencode(".jpg", gray, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        data = jpeg.tobytes()
+        size = struct.pack("!I", len(data))
+        print(f"Sending frame: {len(data)} bytes")
+        input_sock.sendall(size + data)
+        print("Frame sent successfully")
+    except Exception as e:
+        print(f"Frame send error: {e}")
 
-def receive_position():
+def receive_loop():
+    print("Receive loop started")
     while True:
         try:
-            data = output_sock.recv(256).decode()
-            if data:
-                parts = data.strip().split(',')
-                if len(parts) == 4:
+            # Read position line
+            pos_buf = b""
+            while b"\n" not in pos_buf:
+                chunk = output_sock.recv(4096)
+                if not chunk:
+                    return
+                pos_buf += chunk
+
+            pos_line, remainder = pos_buf.split(b"\n", 1)
+            pos_line = pos_line.decode().strip()
+
+            parts = pos_line.split(",")
+            if len(parts) == 4:
+                try:
                     with position_lock:
-                        slam_position["x"] = float(parts[0])
-                        slam_position["y"] = float(parts[1])
-                        slam_position["z"] = float(parts[2])
-                        slam_position["tracking"] = parts[3] == "1"
-        except:
+                        current_position["x"] = float(parts[0])
+                        current_position["y"] = float(parts[1])
+                        current_position["z"] = float(parts[2])
+                        current_position["tracking"] = parts[3].strip() == "1"
+                except ValueError:
+                    pass
+
+            # Read exactly 4 bytes for point cloud size
+            # Use remainder first then read more if needed
+            size_buf = remainder
+            while len(size_buf) < 4:
+                chunk = output_sock.recv(4 - len(size_buf))
+                if not chunk:
+                    return
+                size_buf += chunk
+
+            print(f"Raw size bytes: {size_buf[:4].hex()}")
+            points_size = struct.unpack("!I", size_buf[:4])[0]
+            print(f"Points size to read: {points_size}")
+            extra = size_buf[4:]
+
+            # Read point cloud data
+            points_data = extra
+            while len(points_data) < points_size:
+                chunk = output_sock.recv(min(65536, points_size - len(points_data)))
+                if not chunk:
+                    return
+                points_data += chunk
+
+            if points_size > 0:
+                points_str = points_data[:points_size].decode("utf-8", errors="ignore")
+                points = []
+                for point_str in points_str.split(";"):
+                    point_str = point_str.strip()
+                    if not point_str:
+                        continue
+                    coords = point_str.split(",")
+                    if len(coords) == 3:
+                        try:
+                            points.append({
+                                "x": float(coords[0]),
+                                "y": float(coords[1]),
+                                "z": float(coords[2])
+                            })
+                        except ValueError:
+                            pass
+
+                with points_lock:
+                    current_points.clear()
+                    current_points.extend(points)
+
+                print(f"Received {len(points)} map points")
+
+        except Exception as e:
+            print(f"Receive error: {e}")
             break
 
 def get_position():
     with position_lock:
-        return slam_position.copy()
+        return current_position.copy()
+
+def get_point_cloud():
+    with points_lock:
+        return list(current_points)
 
 def start():
+    print("Connecting to SLAM...")
     connect()
-    thread = threading.Thread(target=receive_position, daemon=True)
+    thread = threading.Thread(target=receive_loop, daemon=True)
     thread.start()
-    print("SLAM client running")
+    print("SLAM client running, receive thread started")
