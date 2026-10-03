@@ -17,7 +17,7 @@ DETECTION_LISTEN_PORT = 9996
 # ─────────────────────────────────────────────────────────
 
 # ── SLAM ─────────────────────────────────────────────────
-USE_SLAM = False
+USE_SLAM = True  # Set to False to disable SLAM
 if USE_SLAM:
     import slam_client
     try:
@@ -89,6 +89,7 @@ def video_loop():
     while True:
         frame = frame_reader.frame
         if frame is None:
+            print(f"Frame shape: {frame.shape}")
             continue
 
         # Send to SLAM

@@ -30,12 +30,9 @@ current_position = {"x": 0.0, "y": 0.0, "z": 0.0, "tracking": False}
 current_points = []
 position_lock = threading.Lock()
 points_lock = threading.Lock()
-import struct as struct_module
 
 def connect():
     print(f"Connecting to {SLAM_HOST}:{SLAM_INPUT_PORT}")
-    input_sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, 
-                          struct_module.pack('ii', 1, 10))
     input_sock.connect((SLAM_HOST, SLAM_INPUT_PORT))
     print("Input connected, waiting for output port...")
     import time
@@ -50,9 +47,7 @@ def send_frame(frame):
         _, jpeg = cv2.imencode(".jpg", gray, [cv2.IMWRITE_JPEG_QUALITY, 80])
         data = jpeg.tobytes()
         size = struct.pack("!I", len(data))
-        print(f"Sending frame: {len(data)} bytes")
         input_sock.sendall(size + data)
-        print("Frame sent successfully")
     except Exception as e:
         print(f"Frame send error: {e}")
 
@@ -74,16 +69,22 @@ def receive_loop():
             parts = pos_line.split(",")
             if len(parts) == 4:
                 try:
+                    tracking = parts[3].strip() == "1"
                     with position_lock:
                         current_position["x"] = float(parts[0])
                         current_position["y"] = float(parts[1])
                         current_position["z"] = float(parts[2])
-                        current_position["tracking"] = parts[3].strip() == "1"
+                        current_position["tracking"] = tracking
+
+                    # Clear point cloud when not tracking
+                    if not tracking:
+                        with points_lock:
+                            current_points.clear()
+
                 except ValueError:
                     pass
 
             # Read exactly 4 bytes for point cloud size
-            # Use remainder first then read more if needed
             size_buf = remainder
             while len(size_buf) < 4:
                 chunk = output_sock.recv(4 - len(size_buf))
@@ -91,42 +92,43 @@ def receive_loop():
                     return
                 size_buf += chunk
 
-            print(f"Raw size bytes: {size_buf[:4].hex()}")
-            points_size = struct.unpack("!I", size_buf[:4])[0]
-            print(f"Points size to read: {points_size}")
+            points_size = struct.unpack("I", size_buf[:4])[0]
             extra = size_buf[4:]
+
+            if points_size == 0:
+                continue
 
             # Read point cloud data
             points_data = extra
             while len(points_data) < points_size:
-                chunk = output_sock.recv(min(65536, points_size - len(points_data)))
+                chunk = output_sock.recv(
+                    min(65536, points_size - len(points_data)))
                 if not chunk:
                     return
                 points_data += chunk
 
-            if points_size > 0:
-                points_str = points_data[:points_size].decode("utf-8", errors="ignore")
-                points = []
-                for point_str in points_str.split(";"):
-                    point_str = point_str.strip()
-                    if not point_str:
-                        continue
-                    coords = point_str.split(",")
-                    if len(coords) == 3:
-                        try:
-                            points.append({
-                                "x": float(coords[0]),
-                                "y": float(coords[1]),
-                                "z": float(coords[2])
-                            })
-                        except ValueError:
-                            pass
+            points_str = points_data[:points_size].decode(
+                "utf-8", errors="ignore")
 
-                with points_lock:
-                    current_points.clear()
-                    current_points.extend(points)
+            points = []
+            for point_str in points_str.split(";"):
+                point_str = point_str.strip()
+                if not point_str:
+                    continue
+                coords = point_str.split(",")
+                if len(coords) == 3:
+                    try:
+                        points.append({
+                            "x": float(coords[0]),
+                            "y": float(coords[1]),
+                            "z": float(coords[2])
+                        })
+                    except ValueError:
+                        pass
 
-                print(f"Received {len(points)} map points")
+            with points_lock:
+                current_points.clear()
+                current_points.extend(points)
 
         except Exception as e:
             print(f"Receive error: {e}")
