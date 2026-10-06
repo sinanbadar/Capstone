@@ -96,10 +96,10 @@ def video_loop():
         if USE_SLAM:
             slam_client.send_frame(frame)
             position = slam_client.get_position()
-            if position["tracking"]:
-                print(f"SLAM pos: {position['x']:.2f}, "
-                      f"{position['y']:.2f}, "
-                      f"{position['z']:.2f}")
+           # if position["tracking"]:
+                #print(f"SLAM pos: {position['x']:.2f}, "
+                      #f"{position['y']:.2f}, "
+                      #f"{position['z']:.2f}")
 
         # Run YOLO
         results = model(frame, verbose=False)
@@ -127,7 +127,7 @@ def video_loop():
                 "slam_pos": slam_client.get_position() if USE_SLAM else None
             }
             detections.append(detection)
-            print(f"Detected: {label} {conf:.2f}")
+            #print(f"Detected: {label} {conf:.2f}")
 
         if detections:
             message = json.dumps(detections).encode()
@@ -172,8 +172,8 @@ def monitor_loop():
         if len(forward_points) >= 5 and now - last_warning > 2.0:
             print(f"OBSTACLE: {len(forward_points)} points within 0.8m")
             last_warning = now
-        elif len(forward_points) > 0:
-            print(f"Points nearby: {len(forward_points)} within 0.8m")
+        #elif len(forward_points) > 0:
+            #print(f"Points nearby: {len(forward_points)} within 0.8m")
 
 threading.Thread(target=monitor_loop, daemon=True).start()
 # ─────────────────────────────────────────────────────────
