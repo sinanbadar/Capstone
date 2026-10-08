@@ -85,7 +85,7 @@ public class TelloSimulator : MonoBehaviour
 
         if (isFlying && rcVelocity != Vector4.zero)
         {
-            float speed = 0.02f;
+            float speed = 0.5f;
             transform.Translate(
                 rcVelocity.x * speed * Time.deltaTime,
                 rcVelocity.z * speed * Time.deltaTime,

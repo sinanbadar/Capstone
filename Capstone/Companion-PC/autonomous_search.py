@@ -3,8 +3,8 @@ import math
 import threading
 
 # ── SEARCH PARAMETERS ────────────────────────────────────
-FORWARD_SPEED = 15
-YAW_SPEED = 30
+FORWARD_SPEED = 80
+YAW_SPEED = 80
 STEP_SIZE_M = 1.0
 OBSTACLE_THRESHOLD_M = 0.5
 OBSTACLE_MIN_POINTS = 25
@@ -18,14 +18,16 @@ POST_TURN_SLAM_DELAY = 4.0
 
 class AutonomousSearch:
     def __init__(self, send_command_func, get_detections_func,
-                 get_position_func, get_point_cloud_func=None,
-                 get_optical_flow_func=None, pause_flow_func=None):
+             get_position_func, get_point_cloud_func=None,
+             get_optical_flow_func=None, pause_flow_func=None,
+             get_depth_func=None):
         self.send_command = send_command_func
         self.get_detections = get_detections_func
         self.get_position = get_position_func
         self.get_point_cloud = get_point_cloud_func
         self.get_optical_flow = get_optical_flow_func
         self.pause_flow = pause_flow_func
+        self.get_depth = get_depth_func
         self.running = False
         self.thread = None
         self.pass_count = 0
@@ -100,6 +102,10 @@ class AutonomousSearch:
         flow_triggered = False
         slam_triggered = False
         flat_wall = False
+
+        if self.get_depth and self.get_depth():
+            print("AUTO: depth obstacle")
+            return True
 
         if self.get_optical_flow and self.get_optical_flow():
             flow_triggered = True

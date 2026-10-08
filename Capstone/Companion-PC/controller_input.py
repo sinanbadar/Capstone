@@ -75,7 +75,7 @@ class ControllerInput:
         # A button double tap: autonomous
         if self.button_pressed(0, cooldown=0.1):
             self.set_mode(ControlMode.AUTONOMOUS)
-            print("Double tap A: AUTONOMOUS")
+            print("A: AUTONOMOUS")
 
         # B button: manual
         if self.button_pressed(1):
@@ -93,12 +93,12 @@ class ControllerInput:
             print("RB: EMERGENCY STOP")
 
         # Start: takeoff
-        if self.button_pressed(6, cooldown=1.0):
+        if self.button_pressed(7, cooldown=1.0):
             action = "takeoff"
             print("Start: TAKEOFF")
 
         # Back: land
-        if self.button_pressed(4, cooldown=1.0):
+        if self.button_pressed(6, cooldown=1.0):
             action = "land"
             print("Back: LAND")
 

@@ -9,6 +9,18 @@ from ultralytics import YOLO
 from controller_input import ControllerInput, ControlMode
 from autonomous_search import AutonomousSearch
 
+from depth_estimator import DepthEstimator
+depth_est = DepthEstimator(threshold=0.3)
+depth_obstacle = False
+depth_lock = threading.Lock()
+
+latest_depth_frame = None
+depth_frame_lock = threading.Lock()
+
+def get_depth_obstacle():
+    with depth_lock:
+        return depth_obstacle
+
 # ── CONFIG ───────────────────────────────────────────────
 UNITY_IP = "127.0.0.1"
 COMMAND_PORT = 8889
@@ -117,6 +129,7 @@ def send_command(command):
         print("Unity not in Play mode")
 
 autonomous = AutonomousSearch(
+    get_depth_func=get_depth_obstacle,
     send_command_func=send_command,
     get_detections_func=get_latest_detections,
     get_position_func=get_position,
@@ -136,6 +149,15 @@ def video_loop():
 
             if frame is None:
                 continue
+
+            # Depth estimation
+            depth_map, depth_vis = depth_est.estimate(frame)
+            with depth_lock:
+                global depth_obstacle
+                depth_obstacle = depth_est.obstacle_ahead(depth_map)
+            with depth_frame_lock:
+                global latest_depth_frame
+                latest_depth_frame = depth_vis
 
             check_optical_flow(frame)
 
@@ -171,7 +193,6 @@ def video_loop():
                     "slam_pos": slam_client.get_position() if USE_SLAM else None
                 }
                 detections.append(detection)
-                print(f"Detected: {label} {conf:.2f}")
 
             if detections:
                 message = json.dumps(detections).encode()
@@ -205,6 +226,12 @@ def run():
             frame = latest_frame
         if frame is not None:
             cv2.imshow("Sim YOLO", frame)
+
+        with depth_frame_lock:
+            dframe = latest_depth_frame
+        if dframe is not None:
+            cv2.imshow("Depth", dframe) 
+            
         cv2.waitKey(1)
 
         action = controller.check_buttons()

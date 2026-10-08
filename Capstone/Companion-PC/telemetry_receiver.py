@@ -29,8 +29,8 @@ def start_telemetry_receiver():
             json_str = data.decode("utf-8")
             state = json.loads(json_str)
             with state_lock:
-                drone_state.update(state)
-            print(f"Telemetry: pos({state['pos_x']:.2f}, {state['pos_y']:.2f}, {state['pos_z']:.2f}) flying:{state['is_flying']}")
+                drone_state.update(state)   
+       #     print(f"Telemetry: pos({state['pos_x']:.2f}, {state['pos_y']:.2f}, {state['pos_z']:.2f}) flying:{state['is_flying']}")
         except socket.timeout:
             pass
         except Exception as e:

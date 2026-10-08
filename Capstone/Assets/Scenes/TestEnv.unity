@@ -4029,9 +4029,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 52745b4db736baa468bf052355f42f63, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  moveSpeed: 15
-  rotateSpeed: 200
-  verticalSpeed: 4
+  moveSpeed: 50
+  rotateSpeed: 300
+  verticalSpeed: 15
   telemetryPort: 9998
   telemetryRate: 0.1
   droneStatusUI: {fileID: 1640049517}
