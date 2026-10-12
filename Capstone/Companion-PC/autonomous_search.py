@@ -3,14 +3,14 @@ import math
 import threading
 
 # ── SEARCH PARAMETERS ────────────────────────────────────
-FORWARD_SPEED = 40
-YAW_SPEED = 40
+FORWARD_SPEED = 5
+YAW_SPEED = 5
 STEP_SIZE_M = 1.0
 OBSTACLE_THRESHOLD_M = 0.5
 OBSTACLE_MIN_POINTS = 25
 KEEPALIVE_INTERVAL = 5.0
 FLAT_WALL_Z_STD = 0.15
-FLAT_WALL_MIN_POINTS = 20
+FLAT_WALL_MIN_POINTS = 20 
 FLAT_WALL_RADIUS = 2.0
 POST_TURN_SLAM_DELAY = 4.0
 # ─────────────────────────────────────────────────────────

@@ -94,6 +94,32 @@ def get_position():
     return {"x": 0.0, "y": 0.0, "z": 0.0, "tracking": False}
 # ─────────────────────────────────────────────────────────
 
+VIDEO_STREAM_PORT = 9093
+video_stream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+def stream_frame_to_unity(frame):
+    try:
+        # Resize to reduce bandwidth
+        small = cv2.resize(frame, (320, 240))
+        _, jpeg = cv2.imencode(".jpg", small, 
+            [cv2.IMWRITE_JPEG_QUALITY, 60])
+        data = jpeg.tobytes()
+        
+        # Split into chunks if too large for UDP
+        chunk_size = 60000
+        chunks = [data[i:i+chunk_size] 
+                  for i in range(0, len(data), chunk_size)]
+        total = len(chunks)
+        
+        for i, chunk in enumerate(chunks):
+            header = f"{i}:{total}:".encode()
+            video_stream_sock.sendto(
+                header + chunk, (UNITY_IP, VIDEO_STREAM_PORT))
+    except Exception as e:
+        pass
+
+# ─────────────────────────────────────────────────────────
+
 def check_optical_flow(frame):
     global prev_gray_frame, optical_flow_obstacle
 
@@ -196,6 +222,8 @@ def video_loop():
         frame = frame_reader.frame
         if frame is None:
             continue
+
+        stream_frame_to_unity(frame)
 
         # Store frame for depth thread
         with depth_input_lock:
