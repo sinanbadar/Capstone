@@ -3,13 +3,12 @@ import math
 import threading
 
 # ── SEARCH PARAMETERS ────────────────────────────────────
-FORWARD_SPEED = 80
-YAW_SPEED = 80
+FORWARD_SPEED = 40
+YAW_SPEED = 40
 STEP_SIZE_M = 1.0
 OBSTACLE_THRESHOLD_M = 0.5
 OBSTACLE_MIN_POINTS = 25
 KEEPALIVE_INTERVAL = 5.0
-MAX_PASS_DURATION = 20.0
 FLAT_WALL_Z_STD = 0.15
 FLAT_WALL_MIN_POINTS = 20
 FLAT_WALL_RADIUS = 2.0
@@ -18,9 +17,9 @@ POST_TURN_SLAM_DELAY = 4.0
 
 class AutonomousSearch:
     def __init__(self, send_command_func, get_detections_func,
-             get_position_func, get_point_cloud_func=None,
-             get_optical_flow_func=None, pause_flow_func=None,
-             get_depth_func=None):
+                 get_position_func, get_point_cloud_func=None,
+                 get_optical_flow_func=None, pause_flow_func=None,
+                 get_depth_func=None):
         self.send_command = send_command_func
         self.get_detections = get_detections_func
         self.get_position = get_position_func
@@ -103,6 +102,7 @@ class AutonomousSearch:
         slam_triggered = False
         flat_wall = False
 
+        # Depth check first, primary sensor
         if self.get_depth and self.get_depth():
             print("AUTO: depth obstacle")
             return True
@@ -176,20 +176,55 @@ class AutonomousSearch:
     def step_sideways(self):
         if self.pause_flow:
             self.pause_flow(True)
-        lr = FORWARD_SPEED * self.step_direction
+
+        turn_yaw = YAW_SPEED if self.step_direction > 0 else -YAW_SPEED
+        self.send_command(f"rc 0 0 0 {turn_yaw}")
+        time.sleep(90 / YAW_SPEED)
+        self.send_command("rc 0 0 0 0")
+        time.sleep(0.5)
+
+        if self.pause_flow:
+            self.pause_flow(False)
+
+        self.last_turn_time = time.time()
+        time.sleep(0.5)
+
+        if self.obstacle_ahead():
+            print("AUTO: sideways blocked, reversing step direction")
+            self.step_direction *= -1
+            turn_yaw = YAW_SPEED if self.step_direction > 0 else -YAW_SPEED
+            if self.pause_flow:
+                self.pause_flow(True)
+            self.send_command(f"rc 0 0 0 {turn_yaw}")
+            time.sleep(180 / YAW_SPEED)
+            self.send_command("rc 0 0 0 0")
+            time.sleep(0.5)
+            if self.pause_flow:
+                self.pause_flow(False)
+            self.last_turn_time = time.time()
+            time.sleep(0.5)
+
         step_duration = STEP_SIZE_M / (FORWARD_SPEED / 100)
-        self.send_command(f"rc {lr} 0 0 0")
+        self.send_command(f"rc 0 {FORWARD_SPEED} 0 0")
         elapsed = 0
-        interval = 1.0
-        while elapsed < step_duration:
-            time.sleep(interval)
-            elapsed += interval
+        while elapsed < step_duration and self.running:
+            time.sleep(1.0)
+            elapsed += 1.0
             if elapsed < step_duration:
-                self.send_command(f"rc {lr} 0 0 0")
+                self.send_command(f"rc 0 {FORWARD_SPEED} 0 0")
+        self.send_command("rc 0 0 0 0")
+        time.sleep(0.3)
+
+        if self.pause_flow:
+            self.pause_flow(True)
+        turn_back = -turn_yaw
+        self.send_command(f"rc 0 0 0 {turn_back}")
+        time.sleep(90 / YAW_SPEED)
         self.send_command("rc 0 0 0 0")
         time.sleep(0.5)
         if self.pause_flow:
             self.pause_flow(False)
+
         print("AUTO: stepped sideways")
 
     # ── FORWARD PASS ──────────────────────────────────────
@@ -220,6 +255,7 @@ class AutonomousSearch:
 
     # ── MAIN EXECUTE ──────────────────────────────────────
     def _execute(self):
+        print("AUTO: _execute thread running")
         print("AUTO: flying forward")
 
         while self.running:
@@ -229,6 +265,7 @@ class AutonomousSearch:
                 break
 
             self.pass_count += 1
+            print(f"AUTO: pass {self.pass_count} complete")
             self.step_sideways()
             self.turn_180()
 

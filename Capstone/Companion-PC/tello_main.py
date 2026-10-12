@@ -6,10 +6,13 @@ import socket
 import time
 import threading
 import logging
+import os
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
 from djitellopy import Tello
 from ultralytics import YOLO
 from controller_input import ControllerInput, ControlMode
 from autonomous_search import AutonomousSearch
+from depth_estimator import DepthEstimator
 
 logging.getLogger('djitellopy').setLevel(logging.WARNING)
 
@@ -19,6 +22,8 @@ UNITY_IP = "127.0.0.1"
 DETECTION_PORT = 9999
 DETECTION_LISTEN_PORT = 9996
 OPTICAL_FLOW_THRESHOLD = 20.0
+TARGET_CLASS = "person"
+TARGET_CONFIDENCE = 0.5
 # ─────────────────────────────────────────────────────────
 
 # ── SLAM ─────────────────────────────────────────────────
@@ -57,6 +62,15 @@ prev_gray_frame = None
 pause_optical_flow = False
 flow_pause_lock = threading.Lock()
 
+# Depth state
+depth_est = DepthEstimator(threshold=0.3)
+depth_obstacle = False
+depth_lock = threading.Lock()
+latest_depth_frame = None
+depth_frame_lock = threading.Lock()
+latest_frame_for_depth = None
+depth_input_lock = threading.Lock()
+
 def get_latest_detections():
     with detection_lock:
         return latest_detections.copy()
@@ -64,6 +78,10 @@ def get_latest_detections():
 def get_optical_flow_obstacle():
     with flow_lock:
         return optical_flow_obstacle
+
+def get_depth_obstacle():
+    with depth_lock:
+        return depth_obstacle
 
 def set_flow_pause(paused):
     global pause_optical_flow
@@ -146,8 +164,30 @@ autonomous = AutonomousSearch(
     get_position_func=get_position,
     get_point_cloud_func=slam_client.get_point_cloud if USE_SLAM else None,
     get_optical_flow_func=get_optical_flow_obstacle,
-    pause_flow_func=set_flow_pause
+    pause_flow_func=set_flow_pause,
+    get_depth_func=get_depth_obstacle
 )
+
+# ── DEPTH LOOP ────────────────────────────────────────────
+def depth_loop():
+    global depth_obstacle, latest_depth_frame
+    while True:
+        with depth_input_lock:
+            frame = latest_frame_for_depth
+        if frame is None:
+            time.sleep(0.05)
+            continue
+        try:
+            depth_map, depth_vis = depth_est.estimate(frame)
+            with depth_lock:
+                depth_obstacle = depth_est.obstacle_ahead(depth_map)
+            with depth_frame_lock:
+                latest_depth_frame = depth_vis
+        except Exception as e:
+            print(f"Depth error: {e}")
+
+threading.Thread(target=depth_loop, daemon=True).start()
+# ─────────────────────────────────────────────────────────
 
 # ── VIDEO AND YOLO LOOP ───────────────────────────────────
 def video_loop():
@@ -156,6 +196,11 @@ def video_loop():
         frame = frame_reader.frame
         if frame is None:
             continue
+
+        # Store frame for depth thread
+        with depth_input_lock:
+            global latest_frame_for_depth
+            latest_frame_for_depth = frame.copy()
 
         check_optical_flow(frame)
 
@@ -174,6 +219,11 @@ def video_loop():
             conf = float(box.conf[0])
             label = model.names[cls]
             xyxy = box.xyxy[0].tolist()
+
+            if label == TARGET_CLASS and conf >= TARGET_CONFIDENCE:
+                pos = get_position()
+                print(f"TARGET FOUND: {label} conf:{conf:.2f} pos:({pos.get('x',0):.2f}, {pos.get('z',0):.2f})")
+
             detection = {
                 "label": label,
                 "confidence": round(conf, 2),
@@ -242,6 +292,12 @@ def run():
             frame = latest_frame
         if frame is not None:
             cv2.imshow("Tello YOLO", frame)
+
+        with depth_frame_lock:
+            dframe = latest_depth_frame
+        if dframe is not None:
+            cv2.imshow("Depth", dframe)
+
         cv2.waitKey(1)
 
         action = controller.check_buttons()
@@ -270,7 +326,12 @@ def run():
             if autonomous.running:
                 autonomous.stop()
             lr, fb, ud, yaw = controller.get_rc_values()
-            drone.send_rc_control(lr, fb, ud, yaw)
+            scale = 0.4
+            drone.send_rc_control(
+                int(lr * scale),
+                int(fb * scale),
+                int(ud * scale),
+                int(yaw * scale))
 
         elif controller.get_mode() == ControlMode.AUTONOMOUS:
             if not autonomous.running:
