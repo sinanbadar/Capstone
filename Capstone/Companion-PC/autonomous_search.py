@@ -4,7 +4,7 @@ import threading
 
 # ── SEARCH PARAMETERS ────────────────────────────────────
 FORWARD_SPEED = 30
-YAW_SPEED = 40
+YAW_SPEED = 50
 STEP_SIZE_M = 1.0
 OBSTACLE_THRESHOLD_M = 0.5
 OBSTACLE_MIN_POINTS = 25
@@ -159,7 +159,7 @@ class AutonomousSearch:
             self.pause_flow(True)
         self.is_yawing = True
         self.send_command(f"rc 0 0 0 {YAW_SPEED}")
-        time.sleep(180 / YAW_SPEED)
+        time.sleep(6)
         self.send_command("rc 0 0 0 0")
         time.sleep(0.3)
         self.send_command("rc 0 0 0 0")
@@ -229,10 +229,11 @@ class AutonomousSearch:
 
     # ── FORWARD PASS ──────────────────────────────────────
     def fly_pass(self):
-        print(f"AUTO: pass {self.pass_count + 1}")
+        print(f"AUTO: pass {self.pass_count + 1} starting")
         self.send_command(f"rc 0 {FORWARD_SPEED} 0 0")
         start_time = time.time()
         last_keepalive = time.time()
+        last_debug = time.time()
 
         while self.running:
             now = time.time()
@@ -241,10 +242,15 @@ class AutonomousSearch:
                 time.sleep(0.05)
                 continue
 
+            # Debug heartbeat every second
+            if now - last_debug > 1.0:
+                print(f"AUTO: flying... {now - start_time:.1f}s elapsed")
+                last_debug = now
+
             if self.obstacle_ahead():
                 self.send_command("rc 0 0 0 0")
                 time.sleep(0.3)
-                print("AUTO: wall detected")
+                print("AUTO: wall detected, stopping")
                 return
 
             if now - last_keepalive > KEEPALIVE_INTERVAL:

@@ -34,34 +34,36 @@ class DepthEstimator:
         # Draw detection zone on visualisation
         h, w = depth.shape
         cv2.rectangle(depth_vis,
-                      (w//6, h//4),
-                      (5*w//6, 3*h//4),
-                      (0, 255, 0), 2)
+                  (int(w * 0.35), int(h * 0.35)),
+                  (int(w * 0.65), int(h * 0.65)),
+                  (0, 255, 0), 2)
 
         return depth, depth_vis
 
     def obstacle_ahead(self, depth_map):
         h, w = depth_map.shape
-
-        # Centre half of frame for detection
-        centre = depth_map[h//4:3*h//4, w//6:5*w//6]
-
-        # Use 5th percentile, more robust than minimum
+        
+        # Narrow centre strip only, ignore sides floor and ceiling
+        centre = depth_map[
+            int(h * 0.35):int(h * 0.65),  # vertical: middle 30% only
+            int(w * 0.35):int(w * 0.65)   # horizontal: middle 30% only
+        ]
+        
         p5 = float(np.percentile(centre, 5))
         min_depth = float(centre.min())
-
+        
         print(f"DEPTH: p5={p5:.3f} min={min_depth:.3f} threshold={self.threshold}")
-
+        
         if p5 < self.threshold:
             self.trigger_count += 1
             print(f"DEPTH: trigger count {self.trigger_count}/2")
             if self.trigger_count >= 2:
                 print("DEPTH: obstacle confirmed")
-                self.trigger_count = 0
                 return True
         else:
-            self.trigger_count = 0
-
+            if self.trigger_count > 0:
+                self.trigger_count -= 1  # decay slowly instead of instant reset
+        
         return False
 
     def get_detection_distance(self, depth_map, bbox):
