@@ -77,6 +77,7 @@ public class ModeReceiver : MonoBehaviour
 
     void UpdateMode(string mode)
     {
+        VideoReceiver.isManualMode = (mode == "MANUAL");
         switch (mode)
         {
             case "MANUAL":

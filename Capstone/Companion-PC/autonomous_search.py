@@ -3,8 +3,8 @@ import math
 import threading
 
 # ── SEARCH PARAMETERS ────────────────────────────────────
-FORWARD_SPEED = 5
-YAW_SPEED = 5
+FORWARD_SPEED = 30
+YAW_SPEED = 40
 STEP_SIZE_M = 1.0
 OBSTACLE_THRESHOLD_M = 0.5
 OBSTACLE_MIN_POINTS = 25

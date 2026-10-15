@@ -8,6 +8,8 @@ using System.Threading;
 public class VideoReceiver : MonoBehaviour
 {
     public RawImage displayImage;
+    public static bool isManualMode = true;
+
     private UdpClient udpClient;
     private Texture2D videoTexture;
     private byte[] pendingFrame;
@@ -20,6 +22,7 @@ public class VideoReceiver : MonoBehaviour
     {
         videoTexture = new Texture2D(320, 240, TextureFormat.RGB24, false);
         displayImage.texture = videoTexture;
+        displayImage.gameObject.SetActive(false);
         udpClient = new UdpClient(9093);
         receiveThread = new Thread(ReceiveLoop);
         receiveThread.IsBackground = true;
@@ -35,7 +38,6 @@ public class VideoReceiver : MonoBehaviour
             {
                 byte[] data = udpClient.Receive(ref ep);
 
-                // Parse header index:total:
                 int firstColon = System.Array.IndexOf(data, (byte)':');
                 int secondColon = System.Array.IndexOf(data, (byte)':', firstColon + 1);
 
@@ -53,7 +55,6 @@ public class VideoReceiver : MonoBehaviour
 
                 if (chunks.Count == expectedTotal)
                 {
-                    // Reassemble
                     System.IO.MemoryStream ms = new();
                     for (int i = 0; i < total; i++)
                         ms.Write(chunks[i], 0, chunks[i].Length);
@@ -69,7 +70,9 @@ public class VideoReceiver : MonoBehaviour
 
     void Update()
     {
-        if (frameReady && pendingFrame != null)
+        displayImage.gameObject.SetActive(isManualMode);
+
+        if (isManualMode && frameReady && pendingFrame != null)
         {
             videoTexture.LoadImage(pendingFrame);
             videoTexture.Apply();
