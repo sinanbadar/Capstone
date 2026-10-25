@@ -18,7 +18,8 @@ logging.getLogger('djitellopy').setLevel(logging.WARNING)
 
 # ── CONFIG ───────────────────────────────────────────────
 DRONE_IP = "192.168.10.1"
-UNITY_IP = "127.0.0.1"
+UNITY_IP = "192.168.10.3"
+#UNITY_IP = "127.0.0.1"
 DETECTION_PORT = 9999
 DETECTION_LISTEN_PORT = 9996
 OPTICAL_FLOW_THRESHOLD = 20.0
@@ -44,6 +45,31 @@ drone.connect()
 print(f"Battery: {drone.get_battery()}%")
 drone.streamon()
 frame_reader = drone.get_frame_read()
+
+TELEMETRY_PORT = 8891
+telemetry_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+def telemetry_loop():
+    while True:
+        try:
+            s = drone.get_current_state()
+            pos = get_position()
+            state = {
+                "pos_x": float(pos.get("x", 0.0)),
+                "pos_y": float(pos.get("y", 0.0)),
+                "pos_z": float(pos.get("z", 0.0)),
+                "is_flying": bool(drone.is_flying),
+                "battery": int(s.get("bat", 0)),
+                "height_m": float(s.get("h", 0)) / 100.0,
+                "speed_mps": float((s.get("vgx", 0) ** 2 + s.get("vgy", 0) ** 2) ** 0.5) / 100.0,
+            }
+            telemetry_sock.sendto(
+                json.dumps(state).encode(), (UNITY_IP, TELEMETRY_PORT))
+        except Exception as e:
+            print(f"TELEMETRY: {e}")
+        time.sleep(0.5)
+
+threading.Thread(target=telemetry_loop, daemon=True).start()
 # ─────────────────────────────────────────────────────────
 
 model = YOLO("yolov8n.pt")
@@ -63,7 +89,7 @@ pause_optical_flow = False
 flow_pause_lock = threading.Lock()
 
 # Depth state
-depth_est = DepthEstimator(threshold=0.3)
+depth_est = DepthEstimator(threshold=4.8)
 depth_obstacle = False
 depth_lock = threading.Lock()
 latest_depth_frame = None
@@ -184,6 +210,36 @@ def send_command(command):
     elif command == "emergency":
         drone.emergency()
 
+latest_depth_map = None
+depth_map_lock = threading.Lock()
+
+def get_latest_depth_map():
+    with depth_map_lock:
+        latest_depth_map = depth_map.copy()
+        latest_depth_time = time.time()
+
+def get_centre_depth():
+    with depth_map_lock:
+        if latest_depth_map is None:
+            return 99.0
+        return depth_est.get_centre_depth(latest_depth_map)
+
+def get_fresh_depth(after_time, timeout=3.0):
+    """Wait for a depth map computed after after_time."""
+    end = time.time() + timeout
+    while time.time() < end:
+        with depth_map_lock:
+            if latest_depth_map is not None and latest_depth_time > after_time:
+                return depth_est.get_centre_depth(latest_depth_map)
+        time.sleep(0.05)
+    return 99.0   # no fresh data, count as blocked
+
+def reset_depth():
+    global depth_obstacle
+    with depth_lock:
+        depth_obstacle = False
+        depth_est.trigger_count = 0
+
 autonomous = AutonomousSearch(
     send_command_func=send_command,
     get_detections_func=get_latest_detections,
@@ -191,12 +247,20 @@ autonomous = AutonomousSearch(
     get_point_cloud_func=slam_client.get_point_cloud if USE_SLAM else None,
     get_optical_flow_func=get_optical_flow_obstacle,
     pause_flow_func=set_flow_pause,
-    get_depth_func=get_depth_obstacle
+    get_depth_func=get_depth_obstacle,
+    get_depth_map_func=get_latest_depth_map,
+    get_centre_depth_func=get_centre_depth,
+    get_fresh_depth_func=get_fresh_depth,
+    reset_depth_func=reset_depth,
 )
 
 # ── DEPTH LOOP ────────────────────────────────────────────
+latest_depth_map = None
+latest_depth_time = 0.0
+depth_map_lock = threading.Lock()
+
 def depth_loop():
-    global depth_obstacle, latest_depth_frame
+    global depth_obstacle, latest_depth_frame, latest_depth_map, latest_depth_time
     while True:
         with depth_input_lock:
             frame = latest_frame_for_depth
@@ -205,6 +269,9 @@ def depth_loop():
             continue
         try:
             depth_map, depth_vis = depth_est.estimate(frame)
+            with depth_map_lock:
+                latest_depth_map = depth_map
+                latest_depth_time = time.time()
             with depth_lock:
                 depth_obstacle = depth_est.obstacle_ahead(depth_map)
             with depth_frame_lock:
@@ -213,66 +280,107 @@ def depth_loop():
             print(f"Depth error: {e}")
 
 threading.Thread(target=depth_loop, daemon=True).start()
+
+def get_latest_depth_map():
+    with depth_map_lock:
+        return latest_depth_map
+
+def get_centre_depth():
+    with depth_map_lock:
+        if latest_depth_map is None:
+            return 99.0
+        return depth_est.get_centre_depth(latest_depth_map)
+
+def get_fresh_depth(after_time, timeout=3.0):
+    end = time.time() + timeout
+    while time.time() < end:
+        with depth_map_lock:
+            if latest_depth_map is not None and latest_depth_time > after_time:
+                return depth_est.get_centre_depth(latest_depth_map)
+        time.sleep(0.05)
+    return 99.0
+
+def reset_depth():
+    global depth_obstacle
+    with depth_lock:
+        depth_obstacle = False
+        depth_est.trigger_count = 0
 # ─────────────────────────────────────────────────────────
 
 # ── VIDEO AND YOLO LOOP ───────────────────────────────────
 def video_loop():
-    global latest_frame
+    global latest_frame, latest_frame_for_depth, latest_detections
+    frame_count = 0
+    last_beat = time.time()
     while True:
-        frame = frame_reader.frame
-        if frame is None:
-            continue
+        try:
+            frame = frame_reader.frame
+            if frame is None:
+                time.sleep(0.01)
+                continue
 
-        stream_frame_to_unity(frame)
+            frame_count += 1
+            if time.time() - last_beat > 1.0:
+                print(f"VIDEO: {frame_count} frames")
+                last_beat = time.time()
 
-        # Store frame for depth thread
-        with depth_input_lock:
-            global latest_frame_for_depth
-            latest_frame_for_depth = frame.copy()
+            stream_frame_to_unity(frame)
 
-        check_optical_flow(frame)
+            with depth_input_lock:
+                latest_frame_for_depth = frame.copy()
 
-        if USE_SLAM:
-            slam_client.send_frame(frame)
+            check_optical_flow(frame)
 
-        results = model(frame, verbose=False)
-        annotated = results[0].plot()
+            if USE_SLAM:
+                slam_client.send_frame(frame)
 
-        with frame_lock:
-            latest_frame = annotated
+            results = model(frame, verbose=False)
+            annotated = results[0].plot()
 
-        detections = []
-        for box in results[0].boxes:
-            cls = int(box.cls[0])
-            conf = float(box.conf[0])
-            label = model.names[cls]
-            xyxy = box.xyxy[0].tolist()
+            with frame_lock:
+                latest_frame = annotated
 
-            if label == TARGET_CLASS and conf >= TARGET_CONFIDENCE:
-                pos = get_position()
-                print(f"TARGET FOUND: {label} conf:{conf:.2f} pos:({pos.get('x',0):.2f}, {pos.get('z',0):.2f})")
+            detections = []
+            for box in results[0].boxes:
+                cls = int(box.cls[0])
+                conf = float(box.conf[0])
+                label = model.names[cls]
+                xyxy = box.xyxy[0].tolist()
 
-            detection = {
-                "label": label,
-                "confidence": round(conf, 2),
-                "bbox": {
-                    "x1": round(xyxy[0]),
-                    "y1": round(xyxy[1]),
-                    "x2": round(xyxy[2]),
-                    "y2": round(xyxy[3])
-                },
-                "slam_pos": slam_client.get_position() if USE_SLAM else None
-            }
-            detections.append(detection)
+                if label == TARGET_CLASS and conf >= TARGET_CONFIDENCE:
+                    pos = get_position()
+                    print(f"TARGET FOUND: {label} conf:{conf:.2f} "
+                          f"pos:({pos.get('x',0):.2f}, {pos.get('z',0):.2f})")
 
-        if detections:
-            message = json.dumps(detections).encode()
-            detection_sock.sendto(message, (UNITY_IP, DETECTION_PORT))
-            drone_controller_sock.sendto(
-                message, ("127.0.0.1", DETECTION_LISTEN_PORT))
-            with detection_lock:
-                global latest_detections
-                latest_detections = detections
+                detections.append({
+                    "label": label,
+                    "confidence": round(conf, 2),
+                    "bbox": {
+                        "x1": round(xyxy[0]),
+                        "y1": round(xyxy[1]),
+                        "x2": round(xyxy[2]),
+                        "y2": round(xyxy[3])
+                    },
+                    "slam_pos": slam_client.get_position() if USE_SLAM else None
+                })
+
+            if detections:
+                message = json.dumps(detections).encode()
+                try:
+                    detection_sock.sendto(message, (UNITY_IP, DETECTION_PORT))
+                except OSError as e:
+                    print(f"DETECTION SEND: {e}")
+                try:
+                    drone_controller_sock.sendto(
+                        message, ("127.0.0.1", DETECTION_LISTEN_PORT))
+                except OSError:
+                    pass
+                with detection_lock:
+                    latest_detections = detections
+
+        except Exception as e:
+            print(f"VIDEO ERROR: {e}")
+            time.sleep(0.1)
 
 threading.Thread(target=video_loop, daemon=True).start()
 # ─────────────────────────────────────────────────────────
@@ -309,7 +417,11 @@ def monitor_loop():
 
 threading.Thread(target=monitor_loop, daemon=True).start()
 # ─────────────────────────────────────────────────────────
-
+def do_takeoff():
+    try:
+        drone.takeoff()
+    except Exception as e:
+        print(f"Takeoff error: {e}")
 # ── CONTROLLER LOOP ───────────────────────────────────────
 def run():
     print("Ready: B=manual  A(x2)=autonomous  Start=takeoff  Back=land  RB=emergency")
@@ -331,11 +443,8 @@ def run():
         action = controller.check_buttons()
 
         if action == "takeoff":
-            try:
-                drone.takeoff()
-                time.sleep(2)
-            except Exception as e:
-                print(f"Takeoff error: {e}")
+            print("Takeoff requested")
+            threading.Thread(target=do_takeoff, daemon=True).start()
 
         elif action == "land":
             autonomous.stop()

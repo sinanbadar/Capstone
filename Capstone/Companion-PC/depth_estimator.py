@@ -6,8 +6,16 @@ import cv2
 import torch
 from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 
+# Zone checked for obstacles (fractions of the frame)
+ZONE_Y0, ZONE_Y1 = 0.25, 0.50   # shifted up to avoid floor
+ZONE_X0, ZONE_X1 = 0.40, 0.60   # narrower, closer to the drone's width
+OBSTACLE_PIXEL_FRACTION = 0.20  # share of the box that must be "close"
+
+
 class DepthEstimator:
-    def __init__(self, threshold=0.15):
+    # NOTE: for this setup LARGER depth values mean CLOSER.
+    # Obstacle = high value. Open space = low value.
+    def __init__(self, threshold=0.6):
         print("Loading Depth Anything V2...")
         self.processor = AutoImageProcessor.from_pretrained(
             "depth-anything/Depth-Anything-V2-Small-hf")
@@ -16,7 +24,16 @@ class DepthEstimator:
         self.model.eval()
         self.threshold = threshold
         self.trigger_count = 0
+        self.last_p95 = 0.0
+        self.frame_count = 0
         print("Depth model ready")
+
+    def _centre(self, depth_map):
+        h, w = depth_map.shape
+        return depth_map[
+            int(h * ZONE_Y0):int(h * ZONE_Y1),
+            int(w * ZONE_X0):int(w * ZONE_X1)
+        ]
 
     def estimate(self, frame):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -31,46 +48,50 @@ class DepthEstimator:
         depth_vis = depth_vis.astype(np.uint8)
         depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_MAGMA)
 
-        # Draw detection zone on visualisation
+        # Detection zone + live readout
         h, w = depth.shape
         cv2.rectangle(depth_vis,
-                  (int(w * 0.35), int(h * 0.35)),
-                  (int(w * 0.65), int(h * 0.65)),
-                  (0, 255, 0), 2)
+                      (int(w * ZONE_X0), int(h * ZONE_Y0)),
+                      (int(w * ZONE_X1), int(h * ZONE_Y1)),
+                      (0, 255, 0), 2)
+        p95 = float(np.percentile(self._centre(depth), 95))
+        frac = float((self._centre(depth) > self.threshold).mean())
+        colour = (0, 0, 255) if frac > OBSTACLE_PIXEL_FRACTION else (0, 255, 0)
+        cv2.putText(depth_vis,
+                    f"frac={frac:.2f} p90={float(np.percentile(self._centre(depth), 90)):.2f} "
+                    f"thr={self.threshold:.2f} trig={self.trigger_count}",
+                    (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 2)
 
         return depth, depth_vis
 
     def obstacle_ahead(self, depth_map):
-        h, w = depth_map.shape
-        
-        # Narrow centre strip only, ignore sides floor and ceiling
-        centre = depth_map[
-            int(h * 0.35):int(h * 0.65),  # vertical: middle 30% only
-            int(w * 0.35):int(w * 0.65)   # horizontal: middle 30% only
-        ]
-        
-        p5 = float(np.percentile(centre, 5))
-        min_depth = float(centre.min())
-        
-        print(f"DEPTH: p5={p5:.3f} min={min_depth:.3f} threshold={self.threshold}")
-        
-        if p5 < self.threshold:
+        centre = self._centre(depth_map)
+        frac = float((centre > self.threshold).mean())
+        self.last_p95 = float(np.percentile(centre, 90))
+
+        self.frame_count += 1
+        if self.frame_count % 30 == 0:
+            print(f"DEPTH: close_frac={frac:.2f} thr={self.threshold}")
+
+        if frac > OBSTACLE_PIXEL_FRACTION:
             self.trigger_count += 1
-            print(f"DEPTH: trigger count {self.trigger_count}/2")
             if self.trigger_count >= 2:
-                print("DEPTH: obstacle confirmed")
+                print(f"DEPTH: obstacle confirmed frac={frac:.2f}")
                 return True
         else:
             if self.trigger_count > 0:
-                self.trigger_count -= 1  # decay slowly instead of instant reset
-        
+                self.trigger_count -= 1
         return False
+
+    def get_centre_depth(self, depth_map):
+        # Raw reading for direction scanning, does not touch trigger_count
+        return float(np.percentile(self._centre(depth_map), 90))
 
     def get_detection_distance(self, depth_map, bbox):
         x1, y1, x2, y2 = [int(v) for v in bbox]
         cx = (x1 + x2) // 2
         cy = (y1 + y2) // 2
         h, w = depth_map.shape
-        cx = min(cx, w - 1)
-        cy = min(cy, h - 1)
+        cx = min(max(cx, 0), w - 1)
+        cy = min(max(cy, 0), h - 1)
         return float(depth_map[cy, cx])
