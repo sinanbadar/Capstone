@@ -25,6 +25,15 @@ DETECTION_LISTEN_PORT = 9996
 OPTICAL_FLOW_THRESHOLD = 20.0
 TARGET_CLASS = "person"
 TARGET_CONFIDENCE = 0.5
+ALERT_PORT = 9995
+alert_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+def send_alert(active, message=""):
+    try:
+        alert_sock.sendto(json.dumps({"active": active, "message": message}).encode(),
+                          (UNITY_IP, ALERT_PORT))
+    except OSError:
+        pass
 # ─────────────────────────────────────────────────────────
 
 # ── SLAM ─────────────────────────────────────────────────

@@ -10,23 +10,31 @@ from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 ZONE_Y0, ZONE_Y1 = 0.25, 0.50   # shifted up to avoid floor
 ZONE_X0, ZONE_X1 = 0.40, 0.60   # narrower, closer to the drone's width
 OBSTACLE_PIXEL_FRACTION = 0.20  # share of the box that must be "close"
+TEX_LOW, TEX_HIGH = 50.0, 500.0     # placeholders, measure on your footage
+THR_LOW_TEX, THR_HIGH_TEX = 4.5, 6.0
+USE_DYNAMIC_THRESHOLD = False       # log-only until verified
 
 
 class DepthEstimator:
     # NOTE: for this setup LARGER depth values mean CLOSER.
     # Obstacle = high value. Open space = low value.
     def __init__(self, threshold=0.6):
-        print("Loading Depth Anything V2...")
-        self.processor = AutoImageProcessor.from_pretrained(
-            "depth-anything/Depth-Anything-V2-Small-hf")
-        self.model = AutoModelForDepthEstimation.from_pretrained(
-            "depth-anything/Depth-Anything-V2-Small-hf")
-        self.model.eval()
-        self.threshold = threshold
-        self.trigger_count = 0
-        self.last_p95 = 0.0
-        self.frame_count = 0
-        print("Depth model ready")
+            print("Loading Depth Anything V2...")
+            self.processor = AutoImageProcessor.from_pretrained(
+                "depth-anything/Depth-Anything-V2-Small-hf")
+            self.model = AutoModelForDepthEstimation.from_pretrained(
+                "depth-anything/Depth-Anything-V2-Small-hf")
+            self.model.eval()
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.model.to(self.device)
+            print(f"Depth running on: {self.device}")
+            self.threshold = threshold
+            self.trigger_count = 0
+            self.last_p95 = 0.0
+            self.frame_count = 0
+            self.base_threshold = threshold
+            self.texture = 0.0
+            print("Depth model ready")
 
     def _centre(self, depth_map):
         h, w = depth_map.shape
@@ -38,9 +46,10 @@ class DepthEstimator:
     def estimate(self, frame):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         inputs = self.processor(images=rgb, return_tensors="pt")
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
         with torch.no_grad():
             outputs = self.model(**inputs)
-        depth = outputs.predicted_depth.squeeze().numpy()
+        depth = outputs.predicted_depth.squeeze().cpu().numpy()
         depth = cv2.resize(depth, (frame.shape[1], frame.shape[0]))
 
         # Normalise for display only
@@ -61,6 +70,17 @@ class DepthEstimator:
                     f"frac={frac:.2f} p90={float(np.percentile(self._centre(depth), 90)):.2f} "
                     f"thr={self.threshold:.2f} trig={self.trigger_count}",
                     (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 2)
+
+        h, w = frame.shape[:2]
+        roi = frame[int(h*ZONE_Y0):int(h*ZONE_Y1), int(w*ZONE_X0):int(w*ZONE_X1)]
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        self.texture = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        t = min(max((self.texture - TEX_LOW) / (TEX_HIGH - TEX_LOW), 0.0), 1.0)
+        target = THR_LOW_TEX + t * (THR_HIGH_TEX - THR_LOW_TEX)
+        if USE_DYNAMIC_THRESHOLD:
+            self.threshold = 0.9 * self.threshold + 0.1 * target
+        elif self.frame_count % 30 == 0:
+            print(f"DEPTH: texture={self.texture:.0f} dynamic would be {target:.2f} fixed {self.threshold:.2f}")    
 
         return depth, depth_vis
 

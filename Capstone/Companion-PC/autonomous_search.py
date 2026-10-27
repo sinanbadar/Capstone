@@ -18,13 +18,15 @@ OBSTACLE_MIN_POINTS = 25
 FLAT_WALL_Z_STD = 0.15
 FLAT_WALL_MIN_POINTS = 20
 FLAT_WALL_RADIUS = 2.0
-STOP_DEPTH_THRESHOLD = 4.8   # keep equal to DepthEstimator(threshold=...) in tello_main.py
+STOP_DEPTH_THRESHOLD = 4.0   # keep equal to DepthEstimator(threshold=...) in tello_main.py
+ALLOW_REVISIT = True     # if only visited headings are open, take the most open one before giving up
 
 # Sensor switches, handy for debugging one sensor at a time
 USE_DEPTH = True
 USE_FLOW = True
 USE_SLAM_OBSTACLE = True
 USE_YOLO_OBSTACLE = True
+EST_SPEED_MPS = 0.30
 
 
 class AutonomousSearch:
@@ -33,7 +35,7 @@ class AutonomousSearch:
                 get_optical_flow_func=None, pause_flow_func=None,
                 get_depth_func=None, get_depth_map_func=None,
                 get_centre_depth_func=None, get_fresh_depth_func=None,
-                reset_depth_func=None):
+                reset_depth_func=None, alert_func=None):
         self.send_command = send_command_func
         self.get_detections = get_detections_func
         self.get_position = get_position_func
@@ -52,8 +54,15 @@ class AutonomousSearch:
         self.last_turn_time = 0
         self.visited = []
         self.current_heading = 0.0
+        self.send_alert = alert_func
+        self.rel = 0    
+        self.est_x = 0.0
+        self.est_z = 0.0
 
     def start(self):
+        self.rel = 0
+        self.est_x = 0.0
+        self.est_z = 0.0
         if self.running:
             print("Already running")
             return
@@ -65,6 +74,8 @@ class AutonomousSearch:
         self.thread = threading.Thread(target=self._execute, daemon=True)
         self.thread.start()
         print("AUTO: started")
+        if self.send_alert:
+            self.send_alert(False, "")
 
     def stop(self):
         self.running = False
@@ -72,13 +83,20 @@ class AutonomousSearch:
         if self.pause_flow:
             self.pause_flow(False)
         self.send_command("rc 0 0 0 0")
+        if self.send_alert:
+            self.send_alert(False, "")
         print("AUTO: stopped")
 
     # VISITED TRACKING (needs SLAM, harmless without it)
+    def _pos(self):
+        p = self.get_position()
+        if p.get("tracking"):
+            return p.get("x", 0.0), p.get("z", 0.0)
+        return self.est_x, self.est_z
+
     def mark_visited(self):
-        pos = self.get_position()
-        if pos.get("tracking"):
-            self.visited.append({"x": pos.get("x", 0), "z": pos.get("z", 0)})
+        x, z = self._pos()
+        self.visited.append({"x": x, "z": z})
 
     def is_visited(self, x, z):
         for v in self.visited:
@@ -176,51 +194,73 @@ class AutonomousSearch:
         if self.reset_depth:
             self.reset_depth()
 
-    def path_is_clear(self):
-        depth = self.sample_depth_ahead()
-        print(f"AUTO: preflight depth {depth:.2f} (stop at {STOP_DEPTH_THRESHOLD})")
-        return depth < STOP_DEPTH_THRESHOLD
-
     # FIND NEXT OPEN, UNVISITED DIRECTION
-    def find_next_direction(self):
-        print("AUTO: looking for an open direction")
-        offsets = [30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180]
-        rel = 0
-        best_depth, best_off = 999.0, 0
+    def _turn_to(self, target):
+        """Turn to an angle relative to the blocked heading, by the shortest way."""
+        diff = (target - self.rel + 180) % 360 - 180
+        self._yaw(diff)
+        self.rel = target
 
-        for off in offsets:
+    def _scan_arc(self, angles):
+        """Visit each angle, sample fresh depth, return the open ones as (angle, depth, visited)."""
+        found = []
+        for a in angles:
             if not self.running:
-                return False
-            self._yaw(off - rel)
-            rel = off
-            self._yaw(off - rel)
-            rel = off
+                return None
+            self._turn_to(a)
             if self.get_fresh_depth:
                 depth = self.get_fresh_depth(time.time() + 0.4)
             else:
                 depth = self.sample_depth_ahead()
-            print(f"AUTO: offset {off} depth {depth:.2f}")
-            print(f"AUTO: offset {off} depth {depth:.2f}")
-            if depth < best_depth:
-                best_depth, best_off = depth, off
-
+            x, z = self._pos()
+            rad = math.radians(self.current_heading)
+            visited = self.is_visited(x + math.sin(rad) * LOOKAHEAD_M,
+                                    z + math.cos(rad) * LOOKAHEAD_M)
+            print(f"AUTO: angle {a:4d}  depth {depth:.2f}  visited={visited}")
             if depth <= OPEN_DEPTH_THRESHOLD:
-                pos = self.get_position()
-                rad = math.radians(self.current_heading)
-                tx = pos.get("x", 0) + math.sin(rad) * LOOKAHEAD_M
-                tz = pos.get("z", 0) + math.cos(rad) * LOOKAHEAD_M
-                if not self.is_visited(tx, tz):
-                    print(f"AUTO: open direction at offset {off}")
-                    return True
+                found.append((a, depth, visited))
+        return found
 
-        # Nothing met the open threshold: face the most open direction seen
-        if best_depth < OPEN_DEPTH_THRESHOLD + 0.8:
-            self._yaw(best_off - rel)
-            print(f"AUTO: taking best direction, offset {best_off}")
+    def find_next_direction(self):
+        print("AUTO: blocked, scanning")
+        self.rel = 0
+        phases = [
+            ("left",  [-30, -60, -90]),
+            ("right", [30, 60, 90]),
+            ("rear",  [120, 150, 180, 210, 240]),
+        ]
+        revisit = []
+
+        for name, angles in phases:
+            if name == "right":
+                self._turn_to(0)        # transit back through the blocked heading, no sample
+            found = self._scan_arc(angles)
+            if found is None:           # operator interrupted
+                return False
+            fresh = [c for c in found if not c[2]]
+            revisit += [c for c in found if c[2]]
+            if fresh:
+                best = min(fresh, key=lambda c: c[1])
+                self._turn_to(best[0])
+                print(f"AUTO: {name} arc, going {best[0]} degrees (depth {best[1]:.2f})")
+                return True
+            print(f"AUTO: nothing open on the {name} arc")
+
+        if ALLOW_REVISIT and revisit:
+            best = min(revisit, key=lambda c: c[1])
+            self._turn_to(best[0])
+            print(f"AUTO: only visited headings open, revisiting {best[0]} degrees")
             return True
 
-        print("AUTO: boxed in, no usable direction")
         return False
+
+    def _hover_and_alert(self, message):
+        print(f"AUTO: {message}. Hovering, manual control needed")
+        while self.running:
+            self.send_command("rc 0 0 0 0")        # keeps the Tello from timing out
+            if self.send_alert:
+                self.send_alert(True, message)
+            time.sleep(1.0)
 
     # FORWARD PASS
     def fly_pass(self):
@@ -229,9 +269,16 @@ class AutonomousSearch:
         start = time.time()
         last_keepalive = time.time()
         last_mark = 0
+        last_t = time.time()
+        
 
         while self.running:
             now = time.time()
+            dt = now - last_t
+            last_t = now
+            rad = math.radians(self.current_heading)
+            self.est_x += math.sin(rad) * EST_SPEED_MPS * dt
+            self.est_z += math.cos(rad) * EST_SPEED_MPS * dt
             if now - start < 1.0:
                 time.sleep(0.05)
                 continue
@@ -254,14 +301,16 @@ class AutonomousSearch:
     # MAIN LOOP
     def _execute(self):
         print("AUTO: reactive DFS exploration starting")
-
         while self.running:
             self.fly_pass()
             if not self.running:
                 break
             self.pass_count += 1
+
             if not self.find_next_direction():
-                print("AUTO: search complete, no open directions")
+                if not self.running:
+                    break
+                self._hover_and_alert("No open path found, manual control required")
                 break
 
         self.send_command("rc 0 0 0 0")

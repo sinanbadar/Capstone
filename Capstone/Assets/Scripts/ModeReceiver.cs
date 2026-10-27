@@ -78,6 +78,14 @@ public class ModeReceiver : MonoBehaviour
     void UpdateMode(string mode)
     {
         VideoReceiver.isManualMode = (mode == "MANUAL");
+        AlertReceiver.manualActive = (mode == "MANUAL");
+
+        if (mode == "MANUAL")
+        {
+            var alert = FindFirstObjectByType<AlertReceiver>();
+            if (alert != null) alert.Hide();
+        }
+
         switch (mode)
         {
             case "MANUAL":
