@@ -38,7 +38,6 @@ public class MinimapController : MonoBehaviour
     private Texture2D minimapTexture;
     private int minimapSize = 256;
 
-    // Store previous drone heading positions for cone drawing
     private Vector3 lastDronePos;
     private List<ConeEntry> coneHistory = new List<ConeEntry>();
     private int maxConeHistory = 200;
@@ -68,7 +67,6 @@ public class MinimapController : MonoBehaviour
         HandleZoomAndPan();
     }
 
-    // FOV CONE
     void UpdateFOVCone()
     {
         if (droneTransform == null) return;
@@ -77,7 +75,6 @@ public class MinimapController : MonoBehaviour
         float dx = currPos.x - lastDronePos.x;
         float dz = currPos.z - lastDronePos.z;
 
-        // Only record cone when drone is moving
         if (Mathf.Sqrt(dx * dx + dz * dz) > 0.05f)
         {
             float heading = Mathf.Atan2(dx, dz) * Mathf.Rad2Deg;
@@ -92,7 +89,6 @@ public class MinimapController : MonoBehaviour
             if (coneHistory.Count > maxConeHistory)
                 coneHistory.RemoveAt(0);
 
-            // Paint cone onto texture
             PaintFOVCone(currPos.x, currPos.z, heading);
             lastDronePos = currPos;
         }
@@ -115,7 +111,6 @@ public class MinimapController : MonoBehaviour
 
             Vector2 endPixel = WorldToPixelRelative(endX, endZ);
 
-            // Draw triangle slice from apex to edge
             DrawLine(
                 Mathf.RoundToInt(apexPixel.x),
                 Mathf.RoundToInt(apexPixel.y),
@@ -153,7 +148,6 @@ public class MinimapController : MonoBehaviour
         }
     }
 
-    // DRONE DOT
     void UpdateDroneDot()
     {
         if (droneTransform == null || droneDot == null) return;
@@ -166,21 +160,18 @@ public class MinimapController : MonoBehaviour
             droneTransform.position.x,
             droneTransform.position.z);
 
-        // Clamp dot inside minimap bounds
         pos.x = Mathf.Clamp(pos.x, -halfW + 8f, halfW - 8f);
         pos.y = Mathf.Clamp(pos.y, -halfH + 8f, halfH - 8f);
 
         droneDot.anchoredPosition = pos;
     }
 
-    // OPERATOR DOT
     void UpdateOperatorDot()
     {
         if (operatorDot == null) return;
         operatorDot.anchoredPosition = Vector2.zero;
     }
 
-    // TRAIL
     void UpdateTrail()
     {
         if (droneTransform == null) return;
@@ -196,10 +187,8 @@ public class MinimapController : MonoBehaviour
         minimapTexture.Apply();
     }
 
-    // ZOOM AND PAN
     void HandleZoomAndPan()
     {
-        // Scroll wheel zoom
         float scroll = Input.GetAxis("Mouse ScrollWheel");
         if (scroll != 0f)
         {
@@ -207,7 +196,6 @@ public class MinimapController : MonoBehaviour
             ApplyZoom();
         }
 
-        // Click and drag pan
         if (Input.GetMouseButtonDown(0))
         {
             RectTransform rt = minimapBackground.rectTransform;
@@ -256,7 +244,6 @@ public class MinimapController : MonoBehaviour
         ApplyZoom();
     }
 
-    // HELPERS
     Vector2 WorldToPixelRelative(float worldX, float worldZ)
     {
         if (operatorTransform == null) return Vector2.zero;

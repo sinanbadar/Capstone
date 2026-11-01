@@ -26,7 +26,7 @@ USE_DEPTH = True
 USE_FLOW = True
 USE_SLAM_OBSTACLE = True
 USE_YOLO_OBSTACLE = True
-EST_SPEED_MPS = 0.30
+EST_SPEED_MPS = 0.9
 
 
 class AutonomousSearch:
@@ -35,7 +35,7 @@ class AutonomousSearch:
                 get_optical_flow_func=None, pause_flow_func=None,
                 get_depth_func=None, get_depth_map_func=None,
                 get_centre_depth_func=None, get_fresh_depth_func=None,
-                reset_depth_func=None, alert_func=None):
+                reset_depth_func=None, alert_func=None, map_update_func=None, room_map=None):
         self.send_command = send_command_func
         self.get_detections = get_detections_func
         self.get_position = get_position_func
@@ -55,6 +55,8 @@ class AutonomousSearch:
         self.visited = []
         self.current_heading = 0.0
         self.send_alert = alert_func
+        self.map_update = map_update_func
+        self.room_map = room_map
         self.rel = 0    
         self.est_x = 0.0
         self.est_z = 0.0
@@ -214,15 +216,34 @@ class AutonomousSearch:
                 depth = self.sample_depth_ahead()
             x, z = self._pos()
             rad = math.radians(self.current_heading)
+            if self.map_update:
+                self.map_update(self.est_x, self.est_z, self.current_heading)
             visited = self.is_visited(x + math.sin(rad) * LOOKAHEAD_M,
                                     z + math.cos(rad) * LOOKAHEAD_M)
             print(f"AUTO: angle {a:4d}  depth {depth:.2f}  visited={visited}")
             if depth <= OPEN_DEPTH_THRESHOLD:
                 found.append((a, depth, visited))
         return found
-
+    
+    def _try_frontier(self):
+        if not self.room_map:
+            return None
+        target = self.room_map.nearest_frontier(self.est_x, self.est_z)
+        if target is None:
+            return None
+        bearing, dist = target
+        diff = (bearing - self.current_heading + 180) % 360 - 180
+        self._yaw(diff)
+        self.rel = 0
+        if self.get_fresh_depth and self.get_fresh_depth(time.time() + 0.4) <= OPEN_DEPTH_THRESHOLD:
+            print(f"AUTO: heading to frontier {dist:.1f}m away")
+            return True
+        return None
+    
     def find_next_direction(self):
         print("AUTO: blocked, scanning")
+        if self._try_frontier():
+            return True
         self.rel = 0
         phases = [
             ("left",  [-30, -60, -90]),
@@ -269,8 +290,8 @@ class AutonomousSearch:
         start = time.time()
         last_keepalive = time.time()
         last_mark = 0
+        last_map = 0
         last_t = time.time()
-        
 
         while self.running:
             now = time.time()
@@ -279,12 +300,17 @@ class AutonomousSearch:
             rad = math.radians(self.current_heading)
             self.est_x += math.sin(rad) * EST_SPEED_MPS * dt
             self.est_z += math.cos(rad) * EST_SPEED_MPS * dt
+            if self.map_update and now - last_map > 0.3 and not self.is_yawing:
+                self.map_update(self.est_x, self.est_z, self.current_heading)
+                last_map = now
+
             if now - start < 1.0:
                 time.sleep(0.05)
                 continue
 
             if now - last_mark > 1.0:
                 self.mark_visited()
+                print(f"EST pos {self.est_x:.2f}, {self.est_z:.2f} heading {self.current_heading:.0f}")
                 last_mark = now
 
             if self.obstacle_ahead():
@@ -297,7 +323,7 @@ class AutonomousSearch:
                 last_keepalive = now
 
             time.sleep(0.05)
-
+    
     # MAIN LOOP
     def _execute(self):
         print("AUTO: reactive DFS exploration starting")
@@ -310,6 +336,9 @@ class AutonomousSearch:
             if not self.find_next_direction():
                 if not self.running:
                     break
+                if self.room_map and not self.room_map.frontiers():
+                    print("AUTO: room fully explored")
+                    # send a room_searched flag to the HUD here
                 self._hover_and_alert("No open path found, manual control required")
                 break
 

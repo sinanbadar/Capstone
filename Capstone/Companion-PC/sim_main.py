@@ -16,6 +16,13 @@ from controller_input import ControllerInput, ControlMode
 import autonomous_search as asr
 from autonomous_search import AutonomousSearch
 from depth_estimator import DepthEstimator
+from occupancy_map import OccupancyMap
+room_map = OccupancyMap()
+
+def map_update(x, z, heading):
+    dm = get_latest_depth_map()
+    if dm is not None:
+        room_map.update(dm, x, z, heading)
 
 # CONFIG
 UNITY_IP = "127.0.0.1"
@@ -38,12 +45,12 @@ def send_alert(active, message=""):
 TARGET_CONFIDENCE = 0.5
 
 # Sim tuning. Calibrate these on Unity frames, the scale differs from the real Tello.
-DEPTH_THRESHOLD = 4.8          # stop threshold, read p90 from the depth window overlay
+DEPTH_THRESHOLD = 3.0          # stop threshold, read p90 from the depth window overlay
 OPEN_DEPTH_THRESHOLD = 4.2     # a heading at or below this counts as open
 FLOW_THRESHOLD = 8.0
 SIM_FORWARD_SPEED = 30
 SIM_YAW_SPEED = 50
-SIM_YAW_DEG_PER_SEC = 30.0     # measure in Unity: degrees turned per second at SIM_YAW_SPEED
+SIM_YAW_DEG_PER_SEC = SIM_YAW_SPEED * 1.2     # = 60.0 with the values above     # measure in Unity: degrees turned per second at SIM_YAW_SPEED
 
 asr.FORWARD_SPEED = SIM_FORWARD_SPEED
 asr.YAW_SPEED = SIM_YAW_SPEED
@@ -244,8 +251,28 @@ autonomous = AutonomousSearch(
     get_fresh_depth_func=get_fresh_depth,
     reset_depth_func=reset_depth,
     alert_func=send_alert,
+     map_update_func=map_update,
+    room_map=room_map,
 )
 
+map_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+MAP_PORT = 9994
+
+def map_sender():
+    while True:
+        try:
+            walls = [v for cell in room_map.export() for v in cell]   # [x0, z0, x1, z1, ...]
+            msg = {"walls": walls,
+                   "drone_x": autonomous.est_x,
+                   "drone_z": autonomous.est_z,
+                   "heading": autonomous.current_heading,
+                   **room_map.stats()}
+            map_sock.sendto(json.dumps(msg).encode(), (UNITY_IP, MAP_PORT))
+        except OSError:
+            pass
+        time.sleep(1.0)
+
+threading.Thread(target=map_sender, daemon=True).start()
 
 # DEPTH LOOP
 def depth_loop():

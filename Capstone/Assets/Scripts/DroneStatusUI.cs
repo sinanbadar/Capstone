@@ -2,9 +2,13 @@
 using TMPro;
 using UnityEngine.UI;
 using System.Collections.Generic;
+using System.Linq;
+using System.Text;
 
 public class DroneStatusUI : MonoBehaviour
 {
+
+
     [Header("Battery")]
     public Slider batterySlider;
     public TextMeshProUGUI batteryText;
@@ -22,6 +26,11 @@ public class DroneStatusUI : MonoBehaviour
 
     [Header("References")]
     public DetectionReceiver detectionReceiver;
+
+    [Header("Detection display")]
+    public int maxDetectionLines = 3;
+    public float detectionRefreshSeconds = 0.25f;
+    private float detectionTimer = 0f;
 
     // ── MODE SWITCH ──────────────────────────────────────
     private bool USE_REAL_TELLO = true;
@@ -194,19 +203,34 @@ public class DroneStatusUI : MonoBehaviour
         if (detectionReceiver == null) return;
         if (!detectionReceiver.newDetectionsAvailable) return;
 
-        if (detectionReceiver.latestDetections.Count == 0)
+        detectionTimer += Time.deltaTime;
+        if (detectionTimer < detectionRefreshSeconds) return;
+        detectionTimer = 0f;
+
+        var dets = detectionReceiver.latestDetections;
+        if (dets.Count == 0)
         {
             detectionsText.text = "None";
             return;
         }
 
-        string output = "";
-        foreach (var detection in detectionReceiver.latestDetections)
+        var groups = dets
+            .GroupBy(d => d.label)
+            .Select(g => new { label = g.Key, count = g.Count(), conf = g.Max(d => d.confidence) })
+            .OrderByDescending(g => g.conf)
+            .ToList();
+
+        var sb = new StringBuilder();
+        int shown = Mathf.Min(maxDetectionLines, groups.Count);
+        for (int i = 0; i < shown; i++)
         {
-            string conf = (detection.confidence * 100f).ToString("F0");
-            output += $"{detection.label} {conf}%\n";
+            string countText = groups[i].count > 1 ? $" x{groups[i].count}" : "";
+            sb.AppendLine($"{groups[i].label}{countText} {Mathf.RoundToInt(groups[i].conf * 100f)}%");
         }
-        detectionsText.text = output.TrimEnd();
+        if (groups.Count > shown)
+            sb.Append($"+{groups.Count - shown} more");
+
+        detectionsText.text = sb.ToString().TrimEnd();
     }
 
     // ── PUBLIC SETTERS FOR REAL TELLO ────────────────────

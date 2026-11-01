@@ -29,6 +29,11 @@ public class TelloSimulator : MonoBehaviour
 
     public DroneStatusUI droneStatusUI;
 
+    [Header("RC movement (used by autonomous and controller)")]
+    public float rcMoveSpeed = 0.03f;      // units per second for each rc unit (forward and sideways)
+    public float rcVerticalSpeed = 0.03f;  // units per second for each rc unit (up and down)
+    public float rcYawSpeed = 1.2f;        // degrees per second for each rc unit
+
     void Start()
     {
         commandSocket = new UdpClient(8889);
@@ -54,7 +59,11 @@ public class TelloSimulator : MonoBehaviour
                 string command = Encoding.UTF8.GetString(data).Trim();
                 Debug.Log("Received: " + command);
                 commandQueue.Enqueue(command);
-                SendResponse(command, sender);
+                if (!command.StartsWith("rc"))
+                {
+                    Debug.Log("Received: " + command);
+                    SendResponse(command, sender);
+                }
             }
             catch (Exception e)
             {
@@ -85,13 +94,12 @@ public class TelloSimulator : MonoBehaviour
 
         if (isFlying && rcVelocity != Vector4.zero)
         {
-            float speed = 0.05f;
             transform.Translate(
-                rcVelocity.x * speed * Time.deltaTime,
-                rcVelocity.z * speed * Time.deltaTime,
-                rcVelocity.y * speed * Time.deltaTime,
+                rcVelocity.x * rcMoveSpeed * Time.deltaTime,       // left/right
+                rcVelocity.z * rcVerticalSpeed * Time.deltaTime,   // up/down
+                rcVelocity.y * rcMoveSpeed * Time.deltaTime,       // forward/back
                 Space.Self);
-            transform.Rotate(0, rcVelocity.w * speed * 2f * Time.deltaTime, 0);
+            transform.Rotate(0, rcVelocity.w * rcYawSpeed * Time.deltaTime, 0);
         }
 
         telemetryTimer += Time.deltaTime;
