@@ -3,8 +3,8 @@ import math
 import threading
 
 # SEARCH PARAMETERS
-FORWARD_SPEED = 30
-YAW_SPEED = 50
+FORWARD_SPEED = 20
+YAW_SPEED = 60
 YAW_DEG_PER_SEC = 30.0       # measured: speed 50 turned 180 deg in about 6s. Recalibrate if it drifts
 SCAN_STEP_DEG = 30           # yaw increment while looking for an open direction
 SETTLE_TIME = 0.7            # wait after each yaw step so the depth map is fresh
@@ -26,7 +26,7 @@ USE_DEPTH = True
 USE_FLOW = True
 USE_SLAM_OBSTACLE = True
 USE_YOLO_OBSTACLE = True
-EST_SPEED_MPS = 0.9
+EST_SPEED_MPS = 0.45
 
 
 class AutonomousSearch:
@@ -60,14 +60,18 @@ class AutonomousSearch:
         self.rel = 0    
         self.est_x = 0.0
         self.est_z = 0.0
+        self.stop_log = []
+        self.on_stop = None 
+        
 
     def start(self):
-        self.rel = 0
-        self.est_x = 0.0
-        self.est_z = 0.0
         if self.running:
             print("Already running")
             return
+        self.rel = 0
+        self.est_x = 0.0
+        self.est_z = 0.0
+        self.stop_log = []
         self.running = True
         self.pass_count = 0
         self.last_turn_time = 0
@@ -165,6 +169,7 @@ class AutonomousSearch:
             depth = self.get_centre_depth() if self.get_centre_depth else None
             tracking = self.get_position().get("tracking")
             d = f"{depth:.2f}" if depth is not None else "n/a"
+            self.stop_log.append({"reason": reason, "depth": depth})
             print(f"STOP reason={reason} depth={d} slam={tracking} pass={self.pass_count + 1}")
             return True
         return False
@@ -283,6 +288,18 @@ class AutonomousSearch:
                 self.send_alert(True, message)
             time.sleep(1.0)
 
+    def verify_heading(self, settle=0.5):
+        """Pause briefly and confirm the chosen heading is open. Returns True if clear."""
+        self.send_command("rc 0 0 0 0")
+        time.sleep(settle)
+        if self.get_fresh_depth:
+            depth = self.get_fresh_depth(time.time() + 0.3)
+        else:
+            depth = self.sample_depth_ahead()
+        ok = depth <= OPEN_DEPTH_THRESHOLD
+        print(f"AUTO: verify heading depth {depth:.2f} -> {'clear' if ok else 'BLOCKED'}")
+        return ok
+
     # FORWARD PASS
     def fly_pass(self):
         print(f"AUTO: pass {self.pass_count + 1} starting")
@@ -316,6 +333,8 @@ class AutonomousSearch:
             if self.obstacle_ahead():
                 self.send_command("rc 0 0 0 0")
                 time.sleep(0.3)
+                if self.on_stop:
+                    self.on_stop(self.stop_log[-1] if self.stop_log else {})
                 return
 
             if now - last_keepalive > KEEPALIVE_INTERVAL:
@@ -333,12 +352,19 @@ class AutonomousSearch:
                 break
             self.pass_count += 1
 
-            if not self.find_next_direction():
+            chosen = self.find_next_direction()
+            tries = 0
+            while chosen and self.running and not self.verify_heading() and tries < 2:
+                tries += 1
+                chosen = self.find_next_direction()      # rescan from the new heading
+            if chosen and not self.verify_heading():
+                chosen = False                            # still blocked after retries
+
+            if not chosen:
                 if not self.running:
                     break
                 if self.room_map and not self.room_map.frontiers():
                     print("AUTO: room fully explored")
-                    # send a room_searched flag to the HUD here
                 self._hover_and_alert("No open path found, manual control required")
                 break
 

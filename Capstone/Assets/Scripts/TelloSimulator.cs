@@ -34,6 +34,22 @@ public class TelloSimulator : MonoBehaviour
     public float rcVerticalSpeed = 0.03f;  // units per second for each rc unit (up and down)
     public float rcYawSpeed = 1.2f;        // degrees per second for each rc unit
 
+    public LayerMask obstacleMask = ~0;   // set to the layers of walls and furniture, NOT the floor
+    private int collisionCount = 0;
+    private bool inContact = false;
+
+    float ForwardDistance()
+    {
+        var hits = Physics.RaycastAll(transform.position, transform.forward, 40f, obstacleMask);
+        float best = 40f;
+        foreach (var h in hits)
+        {
+            if (h.transform.IsChildOf(transform)) continue;
+            if (h.distance < best) best = h.distance;
+        }
+        return best;
+    }
+
     void Start()
     {
         commandSocket = new UdpClient(8889);
@@ -111,8 +127,14 @@ public class TelloSimulator : MonoBehaviour
 
         if (isFlying)
         {
+            bool touching = false;
+            foreach (var c in Physics.OverlapSphere(transform.position, 0.3f, obstacleMask))
+                if (!c.transform.IsChildOf(transform)) { touching = true; break; }
+            if (touching && !inContact) collisionCount++;
+            inContact = touching;
+
             transform.position += Vector3.up *
-                Mathf.Sin(Time.time * 2f) * 0.002f;
+                Mathf.Sin(Time.time * 2f) * 0.00002f;
         }
     }
 
@@ -120,10 +142,8 @@ public class TelloSimulator : MonoBehaviour
     {
         if (lastSender == null)
         {
-            Debug.Log("SendTelemetry: lastSender is null, waiting for first command");
             return;
         }
-        Debug.Log($"Sending telemetry to {lastSender.Address}:{telemetryPort} pos:{transform.position}");
         try
         {
             TelemetryData telemetry = new TelemetryData
@@ -135,7 +155,10 @@ public class TelloSimulator : MonoBehaviour
                 rot_y = transform.eulerAngles.y,
                 rot_z = transform.eulerAngles.z,
                 is_flying = isFlying,
-                timestamp = Time.time
+                timestamp = Time.time,
+                // in SendTelemetry, inside the object initialiser
+                fwd_dist = ForwardDistance(),
+                collisions = collisionCount
             };
 
             string json = JsonUtility.ToJson(telemetry);
@@ -308,4 +331,9 @@ public class TelemetryData
     public float rot_z;
     public bool is_flying;
     public float timestamp;
+    // in TelemetryData
+    public float fwd_dist;
+    public int collisions;
+
+    
 }

@@ -58,7 +58,7 @@ asr.YAW_DEG_PER_SEC = SIM_YAW_DEG_PER_SEC
 asr.OPEN_DEPTH_THRESHOLD = OPEN_DEPTH_THRESHOLD
 
 # SLAM
-USE_SLAM = True
+USE_SLAM = False   # set True to use the slam_client.py module, which connects to the SLAM server in Unity
 if USE_SLAM:
     import slam_client
     try:
@@ -452,12 +452,57 @@ def run():
             if not autonomous.running:
                 autonomous.start()
 
-        elif mode == ControlMode.GAZE:
-            if autonomous.running:
-                autonomous.stop()
-
         time.sleep(0.05)
+TRIAL_MODE = True   # True = automated trials, False = manual control
+ENV_NAME = "plain_bright"           # change per environment
+START_POSE = (0.0, 0.0, 0.0)        # x, z, yaw for this environment
+RUN_SECONDS = 30
+REPEATS = 2
+CONDITIONS = {"depth_only": (True, False), "flow_only": (False, True), "depth_flow": (True, True)}
 
+stop_counter = [0]
+
+def on_stop(info):
+    stop_counter[0] += 1
+    st = telemetry_receiver.get_drone_state()
+    print(f"*** STOP #{stop_counter[0]}  reason={info.get('reason')}  "
+          f"pos=({st['pos_x']:.2f}, {st['pos_z']:.2f})  yaw={st['rot_y']:.0f}")
+
+autonomous.on_stop = on_stop
+
+
+def run_trials():
+    asr.USE_YOLO_OBSTACLE = False
+    asr.USE_SLAM_OBSTACLE = False
+
+    while get_latest_depth_map() is None:
+        time.sleep(0.5)
+    send_command("takeoff")
+    time.sleep(3)
+
+    for cond, (use_d, use_f) in CONDITIONS.items():
+        asr.USE_DEPTH, asr.USE_FLOW = use_d, use_f
+        for rep in range(1, REPEATS + 1):
+            send_command(f"reset {START_POSE[0]} {START_POSE[1]} {START_POSE[2]}")
+            time.sleep(0.5)
+            set_flow_pause(True)
+            time.sleep(0.6)
+            get_fresh_depth(time.time() + 0.3)
+            reset_depth()
+            set_flow_pause(False)
+
+            stop_counter[0] = 0
+            print(f"\n===== {ENV_NAME} | {cond} | run {rep} =====")
+            controller.set_mode(ControlMode.AUTONOMOUS)
+            time.sleep(RUN_SECONDS)
+            controller.set_mode(ControlMode.MANUAL)
+            time.sleep(4)
+
+    print("TRIALS DONE")
+
+
+if TRIAL_MODE:
+    threading.Thread(target=run_trials, daemon=True).start()
 
 try:
     run()

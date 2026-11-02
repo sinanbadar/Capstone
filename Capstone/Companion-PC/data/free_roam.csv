@@ -1,0 +1,3 @@
+plain_bright,depth_only,1,2.0,3,1.5,3,1.5,,,,0,False,{'depth': 3},depth_thr=3.0;flow_thr=8.0;speed=30
+plain_bright,depth_only,2,2.0,7,3.49,7,3.49,,,,0,False,{'depth': 7},depth_thr=3.0;flow_thr=8.0;speed=30
+plain_bright,flow_only,1,2.0,2,1.0,2,1.0,,,,0,False,{'flow': 2},depth_thr=3.0;flow_thr=8.0;speed=30
