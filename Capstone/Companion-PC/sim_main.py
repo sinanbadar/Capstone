@@ -453,7 +453,7 @@ def run():
                 autonomous.start()
 
         time.sleep(0.05)
-TRIAL_MODE = True   # True = automated trials, False = manual control
+TRIAL_MODE = False   # True = automated trials, False = manual control
 ENV_NAME = "plain_bright"           # change per environment
 START_POSE = (0.0, 0.0, 0.0)        # x, z, yaw for this environment
 RUN_SECONDS = 30

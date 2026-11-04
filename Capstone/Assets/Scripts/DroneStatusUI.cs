@@ -1,14 +1,11 @@
 ﻿using UnityEngine;
 using TMPro;
 using UnityEngine.UI;
-using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 
 public class DroneStatusUI : MonoBehaviour
 {
-
-
     [Header("Battery")]
     public Slider batterySlider;
     public TextMeshProUGUI batteryText;
@@ -32,151 +29,127 @@ public class DroneStatusUI : MonoBehaviour
     public float detectionRefreshSeconds = 0.25f;
     private float detectionTimer = 0f;
 
-    // ── MODE SWITCH ──────────────────────────────────────
-    private bool USE_REAL_TELLO = true;
-    // Set to true when testing with real drone
-    // ─────────────────────────────────────────────────────
+    [Header("Hide during demo")]
+    public GameObject[] hideDuringDemo;
 
-    private float flightTimer = 0f;
-    private bool isFlying = false;
-
-    // Simulation values
-    private float fakeBattery = 100f;
-    private Vector3 lastPosition = Vector3.zero;
-    private float totalDistanceTravelled = 0f;
-    private Vector3 currentVelocity = Vector3.zero;
+    // ── DEMO MODE ────────────────────────────────────────
+    [Header("Demo Mode (live-tweakable in Play mode)")]
+    public bool demoMode = true;
 
     public enum DroneStatus { Idle, Flying, Searching, Returning }
-    private DroneStatus currentStatus = DroneStatus.Idle;
+    public DroneStatus status = DroneStatus.Searching;
 
-    // Reference to drone transform for simulation
-    public Transform droneTransform;
-
-    void Start()
+    [Range(0f, 100f)] public float battery = 87f;
+    [Range(0f, 1.7f)] public float height = 1.5f;
+    [Range(0f, 2f)] public float speed = 0.4f;
+    [Range(0f, 500f)] public float distanceTravelled = 0f;
+    [Range(0f, 1800f)] public float flightTimeSeconds = 0f; 
+    public void UpdateFromTelemetry(float posX, float posY, float posZ, bool flying)
     {
-        if (droneTransform != null)
-            lastPosition = droneTransform.position;
+        if (demoMode) return; // ignore real telemetry while demoing
+
+        status = flying ? DroneStatus.Flying : DroneStatus.Idle;
+        height = Mathf.Min(posY, maxHeight);
     }
+
+    [Header("Auto animate (untick to control by slider)")]
+    public bool autoBattery = true;
+    public bool autoHeight = true;
+    public bool autoSpeed = true;
+    public bool autoDistance = true;
+    public bool autoTimer = true;
+
+    [Header("Demo tuning")]
+    public float maxHeight = 1.7f;
+    public float baseHeight = 1.5f;
+    public float heightWobble = 0.08f;
+    public float batteryDrainPerSecond = 0.03f;
+    public Vector2 speedRange = new Vector2(0.25f, 0.6f);
+    // ─────────────────────────────────────────────────────
 
     void Update()
     {
-        UpdateBattery();
-        UpdateFlightMetrics();
-        UpdateFlightTime();
-        UpdateStatus();
+        if (demoMode) AnimateDemo();
+
+        RenderBattery();
+        RenderFlightInfo();
+        RenderStatus();
         UpdateDetections();
     }
 
-    void UpdateBattery()
+    void AnimateDemo()
     {
-        if (USE_REAL_TELLO)
+        float t = Time.time;
+
+        if (autoTimer)
+            flightTimeSeconds += Time.deltaTime;
+
+        if (autoBattery)
+            battery = Mathf.Max(0f, battery - batteryDrainPerSecond * Time.deltaTime);
+
+        if (autoHeight)
         {
-            // ── REAL TELLO ────────────────────────────────
-            // Call this from external script that has drone reference:
-            // droneStatusUI.SetBattery(drone.get_battery());
-            // ─────────────────────────────────────────────
-        }
-        else
-        {
-            // ── SIMULATION ───────────────────────────────
-            fakeBattery -= Time.deltaTime * 0.1f;
-            fakeBattery = Mathf.Clamp(fakeBattery, 0f, 100f);
-            // ─────────────────────────────────────────────
+            float wobble = (Mathf.PerlinNoise(t * 0.3f, 1f) - 0.5f) * 2f * heightWobble;
+            height = baseHeight + wobble;
         }
 
+        if (autoSpeed)
+        {
+            float n = Mathf.PerlinNoise(t * 0.2f, 7f);
+            speed = Mathf.Lerp(speedRange.x, speedRange.y, n);
+        }
+
+        if (autoDistance)
+            distanceTravelled += speed * Time.deltaTime;
+
+        height = Mathf.Clamp(height, 0f, maxHeight);
+    }
+    void LateUpdate()
+    {
+        if (hideDuringDemo == null) return;
+        foreach (var g in hideDuringDemo)
+            if (g != null && g.activeSelf) g.SetActive(false);
+    }
+    void RenderBattery()
+    {
         if (batterySlider != null)
-            batterySlider.value = fakeBattery / 100f;
+            batterySlider.value = battery / 100f;
 
         if (batteryText != null)
-            batteryText.text = $"{Mathf.RoundToInt(fakeBattery)}%";
+            batteryText.text = $"{Mathf.RoundToInt(battery)}%";
 
         if (batteryFill != null)
         {
-            if (fakeBattery > 50f) batteryFill.color = Color.green;
-            else if (fakeBattery > 25f) batteryFill.color = Color.yellow;
+            if (battery > 50f) batteryFill.color = Color.green;
+            else if (battery > 25f) batteryFill.color = Color.yellow;
             else batteryFill.color = Color.red;
         }
     }
 
-    public void UpdateFromTelemetry(float posX, float posY, float posZ, bool flying)
+    void RenderFlightInfo()
     {
-        if (flying && !isFlying)
-        {
-            SetStatus(DroneStatus.Flying);
-        }
-        else if (!flying && isFlying)
-        {
-            SetStatus(DroneStatus.Idle);
-        }
-
         if (heightText != null)
-            heightText.text = $"{posY:F1}m";
-    }
+            heightText.text = $"{height:F1}m";
 
-    void UpdateFlightTime()
-    {
-        if (!isFlying) return;
-        flightTimer += Time.deltaTime;
-        int minutes = Mathf.FloorToInt(flightTimer / 60f);
-        int seconds = Mathf.FloorToInt(flightTimer % 60f);
+        if (speedText != null)
+            speedText.text = $"{speed:F1} m/s";
+
+        if (distanceTravelledText != null)
+            distanceTravelledText.text = $"{distanceTravelled:F1}m";
+
         if (flightTimeText != null)
+        {
+            int minutes = Mathf.FloorToInt(flightTimeSeconds / 60f);
+            int seconds = Mathf.FloorToInt(flightTimeSeconds % 60f);
             flightTimeText.text = $"{minutes:00}:{seconds:00}";
-    }
-
-    void UpdateFlightMetrics()
-    {
-        if (droneTransform == null) return;
-
-        if (USE_REAL_TELLO)
-        {
-            // ── REAL TELLO ────────────────────────────────────────
-            // Height, speed come from Tello telemetry via djitellopy
-            // Call these from your real Tello controller script:
-            //
-            // droneStatusUI.SetHeight(drone.get_height() / 100f);
-            //
-            // Tello reports speed in cm/s, convert to m/s:
-            // float speedX = drone.get_speed_x() / 100f;
-            // float speedY = drone.get_speed_y() / 100f;
-            // float speedZ = drone.get_speed_z() / 100f;
-            // float speed = Mathf.Sqrt(speedX*speedX + speedY*speedY + speedZ*speedZ);
-            // droneStatusUI.SetSpeed(speed);
-            //
-            // Distance accumulated via AddDistance called each update:
-            // droneStatusUI.AddDistance(distanceDelta);
-            // ─────────────────────────────────────────────────────
-        }
-        else
-        {
-            // ── SIMULATION ────────────────────────────────────────
-            // Height always visible even on ground
-            if (heightText != null)
-                heightText.text = $"{droneTransform.position.y:F1}m";
-
-            if (!isFlying) return;
-
-            // Speed from position delta
-            Vector3 delta = droneTransform.position - lastPosition;
-            float speed = delta.magnitude / Time.deltaTime;
-
-            if (speedText != null)
-                speedText.text = $"{speed:F1} m/s";
-
-            // Accumulated distance travelled
-            totalDistanceTravelled += delta.magnitude;
-            if (distanceTravelledText != null)
-                distanceTravelledText.text = $"{totalDistanceTravelled:F1}m";
-
-            lastPosition = droneTransform.position;
-            // ─────────────────────────────────────────────────────
         }
     }
 
-    void UpdateStatus()
+    void RenderStatus()
     {
         if (statusText == null) return;
 
-        switch (currentStatus)
+        switch (status)
         {
             case DroneStatus.Idle:
                 statusText.text = "IDLE";
@@ -233,40 +206,10 @@ public class DroneStatusUI : MonoBehaviour
         detectionsText.text = sb.ToString().TrimEnd();
     }
 
-    // ── PUBLIC SETTERS FOR REAL TELLO ────────────────────
-    public void SetStatus(DroneStatus status)
-    {
-        currentStatus = status;
-        isFlying = status != DroneStatus.Idle;
-        if (status == DroneStatus.Idle)
-        {
-            flightTimer = 0f;
-            totalDistanceTravelled = 0f;
-        }
-    }
-
-    public void SetBattery(float percentage)
-    {
-        fakeBattery = percentage;
-    }
-
-    public void SetHeight(float metres)
-    {
-        if (heightText != null)
-            heightText.text = $"{metres:F1}m";
-    }
-
-    public void SetSpeed(float metersPerSecond)
-    {
-        if (speedText != null)
-            speedText.text = $"{metersPerSecond:F1} m/s";
-    }
-
-    public void AddDistance(float delta)
-    {
-        totalDistanceTravelled += delta;
-        if (distanceTravelledText != null)
-            distanceTravelledText.text = $"{totalDistanceTravelled:F1}m";
-    }
-    // ─────────────────────────────────────────────────────
+    // ── PUBLIC SETTERS (for later real hookup) ───────────
+    public void SetStatus(DroneStatus s) { status = s; }
+    public void SetBattery(float pct) { battery = pct; }
+    public void SetHeight(float m) { height = Mathf.Min(m, maxHeight); }
+    public void SetSpeed(float mps) { speed = mps; }
+    public void AddDistance(float d) { distanceTravelled += d; }
 }
